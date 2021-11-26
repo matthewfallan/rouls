@@ -1,0 +1,7 @@
+Number of bit vectors used: 63950
+Number of unique bit vectors used: 48627
+Number of bit vectors discarded: 27097
+Bit vectors removed because of too many mutations: 0
+Bit vectors removed because of too few informative bits: 3876
+Bit vectors removed because of mutations close by: 16430
+Bit vectors removed because of no info around mutations: 6791

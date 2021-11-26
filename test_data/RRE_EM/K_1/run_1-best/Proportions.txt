@@ -1,0 +1,2 @@
+Cluster, Obs Pi, Real pi 
+1,1.0,1.0

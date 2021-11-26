@@ -1,0 +1,5 @@
+test_data contains all data used for testing the code, from the following sources:
+File/Directory	Source
+ASCII.fasta	"A Tale of Two Cities", Charles Dickens
+RRE.fasta	/lab/solexa_rouskin/projects/mfallan/rna_np_210422Rou/Ref_Genome/RRE.fasta
+RRE_EM	/lab/solexa_rouskin/projects/mfallan/rna_np_210422Rou/EM_Clustering/210422Rou_D21-3900_RRE_28_202_InfoThresh-0.1_SigThresh-0_IncTG-NO_DMSThresh-0.5

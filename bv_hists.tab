@@ -1,0 +1,14 @@
+	Number of bit vectors used	Number of unique bit vectors used	Number of bit vectors discarded	Bit vectors removed because of too many mutations	Bit vectors removed because of too few informative bits	Bit vectors removed because of mutations close by	Bit vectors removed because of no info around mutations
+3kb-ASOs-ctrl2_SARS2_13369_13597_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	222785	96501	50433	0	29913	13058	7462
+3kb-ASOs-ctrl1_SARS2_13369_13597_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	285553	166184	185193	0	132271	38493	14429
+3kb-ASOs-ctrl2_SARS2_14506_14730_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	235255	110523	55444	1	32599	12196	10648
+3kb-ASOs-9_SARS2_13369_13597_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	155136	115045	154968	0	120218	22799	11951
+3kb-ASOs-ctrl1_SARS2_14506_14730_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	163476	127454	66589	2	33736	18931	13920
+3kb-ASOs-ctrl1_SARS2_13832_14059_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	42104	30517	88245	0	83699	2427	2119
+3kb-ASOs-9_SARS2_14506_14730_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	75169	10717	13573	0	9715	1797	2061
+3kb-ASOs-9_SARS2_13610_13831_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	65284	46005	243696	1	232557	7460	3678
+3kb-ASOs-ctrl1_SARS2_14060_14281_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	40778	30754	69368	0	64368	2994	2006
+3kb-ASOs-9_SARS2_13387_13609_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	155078	115154	155744	0	121031	22950	11763
+3kb-ASOs-5_SARS2_14506_14730_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	276239	213048	90024	0	44507	26669	18848
+3kb-ASOs-ctrl1_SARS2_13610_13831_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	29913	23712	418428	0	413518	3197	1713
+3kb-ASOs-4_SARS2_14506_14730_InfoThresh-0.03_SigThresh-0.0_IncTG-NO_DMSThresh-0.5	104612	36350	17498	1	12672	1738	3087

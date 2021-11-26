@@ -1,0 +1,12 @@
+Sample: 210422Rou_D21-3900_RRE_28_202
+Number of EM runs: 10
+Minimum number of iterations: 300
+Convergence cutoff: 0.5
+Informative bits threshold: 0.1
+Signal threshold: 0
+Include Ts and Gs?: NO
+DMS threshold for Scanfold: 0.5
+Num bases for normalization: 8
+Predicted number of clusters: 1
+Time taken: 80.51 mins
+Finished at: 2021-05-15 13:29
