@@ -344,13 +344,15 @@ def mu_histogram(filename, mus, labels=None, label_order=None,
         n_labels = len(labels_set)
         all_label_mus = dict()
         for i_plot, ax in enumerate(axs):
+            col = mus.columns[i_plot]
+            all_label_mus[col] = dict()
             for label in labels_set:
                 label_mus = mus.iloc[:, i_plot].loc[
                         labels.iloc[:, i_plot] == label].squeeze()
                 ax.hist(label_mus, alpha=1/n_labels, label=str(label),
                         bins=hist_bins)
-                ax.set_title(mus.columns[i_plot])
-                all_label_mus[label] = label_mus
+                ax.set_title(col)
+                all_label_mus[col][label] = label_mus
         plt.legend()
     else:
         for i_plot, ax in enumerate(axs):
@@ -380,13 +382,20 @@ def mu_histogram_paired(filename, mus, paired, **kwargs):
     label_order = ["paired", "unpaired", "no data"]
     all_label_mus = mu_histogram(filename, mus, labels=paired_labels,
             label_order=label_order, **kwargs)
-    result = mannwhitneyu(all_label_mus["paired"],
-            all_label_mus["unpaired"], use_continuity=True)
-    p_val = result.pvalue
-    u_stat = result.statistic
-    u_max = len(all_label_mus["paired"]) * len(all_label_mus["unpaired"])
-    auroc = 1 - u_stat / u_max
-    return all_label_mus, auroc, u_stat, p_val
+    aurocs = dict()
+    u_stats = dict()
+    p_vals = dict()
+    for col, col_label_mus in all_label_mus.items():
+        result = mannwhitneyu(col_label_mus["paired"],
+                col_label_mus["unpaired"], use_continuity=True)
+        p_val = result.pvalue
+        u_stat = result.statistic
+        u_max = len(col_label_mus["paired"]) * len(col_label_mus["unpaired"])
+        auroc = 1 - u_stat / u_max
+        aurocs[col] = auroc
+        u_stats[col] = u_stat
+        p_vals[col] = p_val
+    return all_label_mus, aurocs, u_stats, p_vals
 
     
 def get_data_structure_agreement(metric, paired, mus, weights=None,
@@ -1164,7 +1173,7 @@ BASE_COLORS = {
 MATPLOTLIB_RC_PARAM_KEY = "mplrc"
 
 
-def align_mus(mus, matched_indexes=True, ignore_index=False):
+def align_mus(mus, matched_indexes=True, ignore_index=False, seqs=None):
     """
     params:
     mus (dict[str, pd.Series]): mutation rates
@@ -1182,8 +1191,34 @@ def align_mus(mus, matched_indexes=True, ignore_index=False):
             index_lens_match = len({len(m.index)
                     for label, m in mus.items()}) == 1
             if not index_lens_match:
-                raise ValueError("Cannot compare two sets of unequal lengths if"
-                        " the indexes are not matched.")
+                if seqs is None:
+                    raise ValueError("Cannot compare two sets of unequal lengths if"
+                        " the indexes are not matched and sequences are not provided.")
+                else:
+                    if sorted(seqs.keys()) != sorted(mus.keys()):
+                        raise ValueError("seqs and mus must have the same keys")
+                    seqs_mus = {label:
+                            "".join([seqs[label][pos - 1] for pos in mus[label].index])
+                            for label in seqs.keys()}
+                    print(seqs_mus)
+                    shortest_seq_len = min(map(len, seqs_mus.values()))
+                    print("len", shortest_seq_len)
+                    shortest_seqs = {seq for seq in seqs_mus.values()
+                            if len(seq) == shortest_seq_len}
+                    if len(shortest_seqs) == 0:
+                        raise ValueError("No sequences were given in labels.")
+                    elif len(shortest_seqs) == 1:
+                        shortest_seq = list(shortest_seqs)[0]
+                        seqs_are_nested = all((seq.count(shortest_seq) == 1 for seq in seqs_mus.values()))
+                    else:
+                        seqs_are_nested = False
+                    if not seqs_are_nested:
+                        raise ValueError("If indexes are not matched and mus are not all same length,"
+                                " all given sequences must be nested.")
+                    seq_offsets = {label: seq.index(shortest_seq) for label, seq in seqs_mus.items()}
+                    mus = {label: m.iloc[list(range(
+                        seq_offsets[label], seq_offsets[label] + shortest_seq_len))]
+                        for label, m in mus.items()}
     if ignore_index:
         for m in mus.items():
             m.index = list(range(len(m.index)))
@@ -1267,22 +1302,23 @@ def scatterplot_mus(labels, mus, pis, matches, files, out_file,
     if len(labels) != 2:
         raise ValueError("scatterplot_mus requires exactly two labels")
     l1, l2 = labels
-    mus = align_mus(mus, matched_indexes=matched_indexes)
+    seq_file_1 = os.path.join(files.loc[l1, "Projects"],
+            files.loc[l1, "Project"], "Ref_Genome",
+            f"{matches[l1]['ref']}.fasta")
+    seq_file_2 = os.path.join(files.loc[l2, "Projects"],
+            files.loc[l2, "Project"], "Ref_Genome",
+            f"{matches[l2]['ref']}.fasta")
+    name_1, seq_1 = read_fasta(seq_file_1)
+    name_2, seq_2 = read_fasta(seq_file_2)
+    seqs = {l1: seq_1, l2: seq_2}
+    mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
     mu1, mu2 = mus[l1], mus[l2]
-    #mu1 = mu1 / mu1.max()
-    #mu2 = mu2 / mu2.max()
+    mu1 = mu1 / mu1.max()
+    mu2 = mu2 / mu2.max()
     print("mu1", mu1.index)
     print("mu2", mu2.index)
     fig, ax = plt.subplots()
     if base_color:
-        seq_file_1 = os.path.join(files.loc[l1, "Projects"],
-                files.loc[l1, "Project"], "Ref_Genome",
-                f"{matches[l1]['ref']}.fasta")
-        seq_file_2 = os.path.join(files.loc[l2, "Projects"],
-                files.loc[l2, "Project"], "Ref_Genome",
-                f"{matches[l2]['ref']}.fasta")
-        name_1, seq_1 = read_fasta(seq_file_1)
-        name_2, seq_2 = read_fasta(seq_file_2)
         colors_1 = [BASE_COLORS[seq_1[pos - 1]] for pos in mu1.index]
         colors_2 = [BASE_COLORS[seq_2[pos - 1]] for pos in mu2.index]
         if colors_1 != colors_2:
