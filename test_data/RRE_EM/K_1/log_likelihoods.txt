@@ -1,0 +1,2 @@
+Run	Log_likelihood	BIC_score
+1-best	-922124.6	1845231.26

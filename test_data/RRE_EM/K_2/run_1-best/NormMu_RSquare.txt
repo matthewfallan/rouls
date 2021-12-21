@@ -1,0 +1,2 @@
+ClusterA-ClusterB:R-Square,P-value
+Cluster1-Cluster2:0.5708309725441107,4.968386671289599e-18
