@@ -1150,6 +1150,20 @@ def plot_mus(plots_file, label_delim=", "):
         elif row.Type == "scatmat":
             scatterplot_matrix_mus(labels, sub_mus, pis, matches, files,
                     out_file, **options)
+        elif row.Type == "corrbar":
+            if hasattr(row, "Groups"):
+                groups = str(row.Groups).split(label_delim)
+                if len(groups) != 2:
+                    print("There are not 2 groups, running without user defined group labels.")
+                    groups = None
+            else:
+                groups = None
+            try:
+                sample = str(row.Sample)
+            except AttributeError:
+                print("Corrbar plots require the sample column is populated.")
+                sys.exit()
+            corrbar_mus(sample, labels, groups, sub_mus, pis, matches, files, out_file, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
@@ -1537,6 +1551,135 @@ def barplot_mus(labels, mus, pis, matches, files, out_file, sharey=True,
             plt.xlabel(xlabel)
         if ylabel is not None:
             plt.ylabel(ylabel)
+    fig.tight_layout()
+    plt.savefig(out_file)
+    plt.close()
+
+
+def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
+        title=None, xlabel=None, ylabel=None,
+        label_titles=False, matched_indexes=True, margin=0.05, coeff_det=True, pearson=True, spearman=True, **kwargs):
+    """
+    Generate a bar chart of correlation between sample replicates and treatment groups. Can accept a "Groups" column in input excel sheet for user defined group names.
+    The first two labels (labels separated by ", ") will be assigned to the first group (groups separated by ", ") and the second two labels will be assigned to the second group.
+    corrbar_mus will calculate the R^2 value between the following comparisons: group1_label_1 vs group1_label_2, group2_label_1 vs group2_label_2, group1_label_1 vs group2_label_1, group1_label_2 vs group2_label_2.
+    If no user defined group names are specified or the "Groups" column is malformed (i.e. it is missing or does not contain 2 groups), the R^2 value will be calculated between the following comparisons: label_1 vs label_2, label_3 vs label_4, label_1 vs label_3, label_2 vs label_4.
+    params:
+    - matched_indexes (bool): If True (default), index positions are assumed to
+      correspond (e.g. index 150 in mu1 corresponds to the same base as index
+      150 in mu2); if the indexes are not the same length, the intersection is
+      taken so that both sets have the same number of points. If False, the
+      indexes must have the same length in order to know which points from mu1
+      and mu2 correspond to each other.
+    """
+    if len(labels) != 4:
+        raise ValueError("corrbar_mus requires exactly four labels.")
+
+    l1, l2, l3, l4 = labels
+    
+    if groups is None:
+        groups = [f"{l1}_vs_{l2}", f"{l3}_vs_{l4}", f"{l1}_vs_{l3}", f"{l2}_vs_{l4}"]
+    else:
+        group1, group2 = groups
+        groups = [f"{group1}1_vs_{group1}2", f"{group2}1_vs_{group2}2", f"{group1}1_vs_{group2}1", f"{group1}2_vs_{group2}2"]
+    
+    print(f"Using groups: {', '.join(groups)}")
+
+    grouped_data = dict()
+    for group in groups:
+        grouped_data[group] = {"corrs":dict()}
+    
+    grouped_data[groups[0]]["labels"] = (l1, l2)
+    grouped_data[groups[1]]["labels"] = (l3, l4)
+    grouped_data[groups[2]]["labels"] = (l1, l3)
+    grouped_data[groups[3]]["labels"] = (l2, l4)
+
+    seq_file_1 = os.path.join(files.loc[l1, "Projects"],
+            files.loc[l1, "Project"], "Ref_Genome",
+            f"{matches[l1]['ref']}.fasta")
+    seq_file_2 = os.path.join(files.loc[l2, "Projects"],
+            files.loc[l2, "Project"], "Ref_Genome",
+            f"{matches[l2]['ref']}.fasta")
+    seq_file_3 = os.path.join(files.loc[l3, "Projects"],
+            files.loc[l3, "Project"], "Ref_Genome",
+            f"{matches[l3]['ref']}.fasta")
+    seq_file_4 = os.path.join(files.loc[l4, "Projects"],
+            files.loc[l4, "Project"], "Ref_Genome",
+            f"{matches[l4]['ref']}.fasta")
+
+    name_1, seq_1 = read_fasta(seq_file_1)
+    name_2, seq_2 = read_fasta(seq_file_2)
+    name_3, seq_3 = read_fasta(seq_file_3)
+    name_4, seq_4 = read_fasta(seq_file_4)
+    
+    seqs = {l1: seq_1, l2: seq_2, l3: seq_3, l4: seq_4}
+    mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
+    mu1, mu2, mu3, mu4 = mus[l1], mus[l2], mus[l3], mus[l4]
+
+    fig, ax = plt.subplots()
+
+    if coeff_det:
+        pearson_corr_set1, pearson_pval_set1 = pearsonr(mu1, mu2)
+        pearson_corr_set2, pearson_pval_set2 = pearsonr(mu3, mu4)
+        pearson_corr_set3, pearson_pval_set3 = pearsonr(mu1, mu3)
+        pearson_corr_set4, pearson_pval_set4 = pearsonr(mu2, mu4)
+
+        grouped_data[groups[0]]["corrs"]["R^2"] = round(pearson_corr_set1**2, 5)
+        grouped_data[groups[1]]["corrs"]["R^2"] = round(pearson_corr_set2**2, 5)
+        grouped_data[groups[2]]["corrs"]["R^2"] = round(pearson_corr_set3**2, 5)
+        grouped_data[groups[3]]["corrs"]["R^2"] = round(pearson_corr_set4**2, 5)
+
+    # if pearson:
+        # pearson_corr_set1, pearson_pval_set1 = pearsonr(mu1, mu2)
+        # pearson_corr_set2, pearson_pval_set2 = pearsonr(mu3, mu4)
+        # pearson_corr_set3, pearson_pval_set3 = pearsonr(mu1, mu3)
+        # pearson_corr_set4, pearson_pval_set4 = pearsonr(mu2, mu4)
+
+        # grouped_data[group[0]]["corrs"]["pearson"] = round(pearson_corr_set1, 5)
+        # grouped_data[group[1]]["corrs"]["pearson"] = round(pearson_corr_set2, 5)
+        # grouped_data[group[2]]["corrs"]["pearson"] = round(pearson_corr_set3, 5)
+        # grouped_data[group[3]]["corrs"]["pearson"] = round(pearson_corr_set4, 5)
+
+    # if spearman:
+    #     spearman_corr_set1, spearman_pval_set1 = spearmanr(mu1, mu2)
+    #     spearman_corr_set2, spearman_pval_set2 = spearmanr(mu3, mu4)
+    #     spearman_corr_set3, spearman_pval_set3 = spearmanr(mu1, mu3)
+    #     spearman_corr_set4, spearman_pval_set4 = spearmanr(mu2, mu4)
+
+        # grouped_data[group[0]]["corrs"]["spearman"] = round(spearman_corr_set1, 5)
+        # grouped_data[group[1]]["corrs"]["spearman"] = round(spearman_corr_set2, 5)
+        # grouped_data[group[2]]["corrs"]["spearman"] = round(spearman_corr_set3, 5)
+        # grouped_data[group[3]]["corrs"]["spearman"] = round(spearman_corr_set4, 5)
+
+    correlations = dict()
+    for group in grouped_data:
+        correlations[group] = grouped_data[group]["corrs"]["R^2"]
+    
+    def autolabel(rects):
+        """Attach a text label above each bar in *rects*, displaying its height."""
+        for rect in rects:
+            height = rect.get_height()
+            ax.annotate('{}'.format(height),
+                        xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+
+    bar = ax.bar(correlations.keys(), correlations.values(), width=0.7, edgecolor="k")
+    autolabel(bar)
+    plt.xticks(fontsize=10, rotation=30)
+    xy_lim = 1.1 * (1 + margin)
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+    else:
+        ax.set_ylabel("R^2")
+    ax.set_ylim(0,xy_lim)
+    if title is not None:
+        ax.set_title(title)
+    else:
+        ax.set_title(f"{sample} DMS Reactivity Correlation")
     fig.tight_layout()
     plt.savefig(out_file)
     plt.close()
