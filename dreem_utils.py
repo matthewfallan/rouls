@@ -1138,6 +1138,11 @@ def plot_mus(plots_file, label_delim=", "):
             for key, value in options[MATPLOTLIB_RC_PARAM_KEY].items():
                 matplotlib.rcParams[key] = value
         sub_mus = {l: mus[l] for l in labels}
+        if hasattr(row, "Threshold"):
+            threshold = int(row.Threshold)
+            for label in sub_mus:
+                idxs = filter_coverage(label, threshold, files)
+                sub_mus[label] = sub_mus[label][sub_mus[label].index.intersection(idxs)]
         if row.Type == "bar":
             barplot_mus(labels, sub_mus, pis, matches, files, out_file,
                     **options)
@@ -1145,28 +1150,82 @@ def plot_mus(plots_file, label_delim=", "):
             diffplot_mus(labels, sub_mus, pis, matches, files, out_file,
                     **options)
         elif row.Type == "scatter":
+
             scatterplot_mus(labels, sub_mus, pis, matches, files, out_file,
                     **options)
         elif row.Type == "scatmat":
             scatterplot_matrix_mus(labels, sub_mus, pis, matches, files,
                     out_file, **options)
         elif row.Type == "corrbar":
+            groups = None
             if hasattr(row, "Groups"):
                 groups = str(row.Groups).split(label_delim)
                 if len(groups) != 2:
                     print("There are not 2 groups, running without user defined group labels.")
-                    groups = None
-            else:
-                groups = None
             try:
                 sample = str(row.Sample)
             except AttributeError:
                 print("Corrbar plots require the sample column is populated.")
                 sys.exit()
             corrbar_mus(sample, labels, groups, sub_mus, pis, matches, files, out_file, **options)
+        elif row.Type == "contcorr":
+            groups = None
+            if not hasattr(row, "Groups"):
+                raise AttributeError("Groups column is required for merging.")
+            else:
+                groups = str(row.Groups).split(label_delim)
+            try:
+                sample = str(row.Sample)
+            except AttributeError:
+                print("Contcorr plots require the sample column is populated.")
+                sys.exit()
+            try:
+                window = int(row.Window)
+            except AttributeError:
+                print("Contcorr plots require the 'Window' column is populated.")
+                sys.exit()
+            groups_dict = {groups[0]:(labels[0], labels[1], labels[2]),groups[1]:(labels[3], labels[4], labels[5])}
+            merged_mus = merge_mus(sub_mus, groups_dict)
+            #Collect one file label per group (each group shares a .fasta) for sequence matching.
+            file_labels = []
+            for group in groups_dict:
+                file_labels.append(groups_dict[group][0])
+            new_labels = list(merged_mus.keys())
+            contcorr_mus(sample, new_labels, merged_mus, window, pis, matches, file_labels, files, out_file, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
+def merge_mus(sub_mus, merge_groups):
+    """
+    Align and merge mutation rates from different samples.
+    params:
+    - sub_mus (dict): Dictionary defining sample labels and mu list e.g. {label1:mu_list1, label2:mu_list2, label3:mu_list3, label4:mu_list4}
+    - merge_groups (dict): Dictionary defining groups of lables to be merged e.g. {group1:(label1, label2), group2:(label3, label4)}
+    returns: dict
+    """
+    def merge_group(group_name, label_list, sub_mus):
+        group_mus = dict()
+        for label in label_list:
+            group_mus[label] = sub_mus[label]
+        # index_range = []
+        # for mu in group_mus:
+        #     for index in group_mus[mu].index.values:
+        #         index_range.append(index)
+        # min_index = min(index_range)
+        # max_index = max(index_range)
+        # full_index_range = np.arange(min_index,max_index)
+        # first_mu = list(group_mus.keys())[0]
+        # group_mus[first_mu] = group_mus[first_mu].reindex(full_index_range)
+        dfs = [s.to_frame() for s in group_mus.values()]
+        merged_mus = pd.concat(dfs)
+        merged_mus = merged_mus.groupby(merged_mus.index).mean()
+        merged_mu_series = merged_mus.squeeze(axis=1)
+        return merged_mu_series
+
+    final_mus = dict()
+    for group in merge_groups:
+        final_mus[group] = merge_group(group, merge_groups[group], sub_mus)
+    return final_mus
 
 BASE_COLORS = {
         "A": (209/255, 124/255, 111/255),
@@ -1611,7 +1670,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     name_2, seq_2 = read_fasta(seq_file_2)
     name_3, seq_3 = read_fasta(seq_file_3)
     name_4, seq_4 = read_fasta(seq_file_4)
-    
+
     seqs = {l1: seq_1, l2: seq_2, l3: seq_3, l4: seq_4}
     mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
     mu1, mu2, mu3, mu4 = mus[l1], mus[l2], mus[l3], mus[l4]
@@ -1683,6 +1742,178 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     fig.tight_layout()
     plt.savefig(out_file)
     plt.close()
+
+
+def contcorr_mus(sample, labels, mus, window, pis, matches, file_labels, files, out_file,
+        base_color=True, title=None, xlabel=None, ylabel=None,
+        label_titles=False, matched_indexes=True, margin=0.05,
+        xy_line=True, coeff_det=True, pearson=True, spearman=True,
+        equal_axes=True, square_plot=True, x_max=None, y_max=None, **kwargs):
+    """
+    Generate a continuous correlation plot
+    params:
+    - matched_indexes (bool): If True (default), index positions are assumed to
+      correspond (e.g. index 150 in mu1 corresponds to the same base as index
+      150 in mu2); if the indexes are not the same length, the intersection is
+      taken so that both sets have the same number of points. If False, the
+      indexes must have the same length in order to know which points from mu1
+      and mu2 correspond to each other.
+    """
+    if len(labels) != 2:
+        raise ValueError("contcorr_mus requires exactly two labels")
+    l1, l2 = labels
+    fl1, fl2 = file_labels
+    seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
+            files.loc[fl1, "Project"], "Ref_Genome",
+            f"{matches[fl1]['ref']}.fasta")
+    seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
+            files.loc[fl2, "Project"], "Ref_Genome",
+            f"{matches[fl2]['ref']}.fasta")
+    name_1, seq_1 = read_fasta(seq_file_1)
+    name_2, seq_2 = read_fasta(seq_file_2)
+    seqs = {l1: seq_1, l2: seq_2}
+    mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
+    mu1, mu2 = mus[l1], mus[l2]
+    mu1 = mu1 / mu1.max()
+    mu2 = mu2 / mu2.max()
+    fig, ax = plt.subplots()
+    if base_color:
+        colors_1 = [BASE_COLORS[seq_1[pos - 1]] for pos in mu1.index]
+        colors_2 = [BASE_COLORS[seq_2[pos - 1]] for pos in mu2.index]
+        if colors_1 != colors_2:
+            raise ValueError("Cannot color bases if sequences do not match.")
+        colors = colors_1
+    else:
+        colors = None
+    data_dict = dict() 
+
+    indices = list(mu1.index)
+    start = 0
+    for modified_base_num, position in enumerate(mu1):
+        end = start+window
+        pearson_corr, pearson_pval = pearsonr(mu1[start:end], mu2[start:end])
+        if end >= len(indices):
+            end = len(indices)-1
+            middle = (indices[end]-indices[start])/2+indices[start]
+            data_dict[middle] = pearson_corr**2
+            break
+        middle = (indices[end]-indices[start])/2+indices[start]
+        data_dict[middle] = pearson_corr**2
+        start += 1
+    ax.plot(data_dict.keys(), data_dict.values())
+    if equal_axes:
+        if x_max is None and y_max is None:
+            max_val = max(mu1.max(), mu2.max())
+            xy_lim = max_val * (1 + margin)
+            x_max = xy_lim
+            y_max = xy_lim
+        else:
+            if x_max is not None and y_max is not None:
+                if not np.isclose(x_max, y_max):
+                    raise ValueError("If equal axes and x_max and y_max are given, then x_max must equal y_max")
+            elif x_max is not None:
+                y_max = x_max
+            else:
+                x_max = y_max
+    else:
+        if x_max is None:
+            x_max = mu1.max() * (1 + margin)
+        if y_max is None:
+            y_max = mu2.max() * (1 + margin)
+    # if square_plot:
+    #     ax.set_aspect(x_max / y_max)
+    # ax.set_xlim((0, x_max))
+    # ax.set_ylim((0, y_max))
+    # corr_text = list()
+    # if coeff_det:
+    #     pearson_corr, pearson_pval = pearsonr(mu1, mu2)
+    #     corr_text.append(f"R^2 = {round(pearson_corr**2, 5)}"
+    #             f" (logP = {round(np.log10(pearson_pval), 5)})")
+    ax.set_ylim(0, 1.1)
+    if xlabel is None:
+        xlabel = "Position (bp)"
+    ax.set_xlabel(xlabel)
+    if ylabel is None:
+        ylabel = "Correlation (R^2)"
+    ax.set_ylabel(ylabel)
+    if title is not None:
+        ax.set_title(title)
+    else:
+        ax.set_title(f"{sample} DMS Reactivity Correlation {l1.capitalize()} vs {l2.capitalize()}")
+    fig.tight_layout()
+    plt.savefig(out_file)
+    plt.close()
+
+bv_file_pattern = re.compile("(?P<sample>\S+)_(?P<ref>\S+)_(?P<start>\d+)"
+        "_(?P<end>\d+)_bitvectors.txt")
+
+
+def get_bitvector_file(label, label_info):
+    ref = label_info.Reference
+    start = label_info.Start
+    end = label_info.End
+    sample = label_info.Sample
+    project_dir = os.path.join(label_info.Projects, label_info.Project)
+    bitvector_files_dir = os.path.join(project_dir, label_info.BitVector_Files)
+
+    param_str = (f"{bitvector_files_dir}, {label}, {ref}, {start}, {end}")
+    sample_dirs = list()
+    sample_dir_full = ""
+    for f in os.listdir(bitvector_files_dir):
+        match = bv_file_pattern.match(f)
+        if match:
+            if (sample != "" and ref != ""
+                    and f.startswith(f"{sample}_{ref}")):
+                # If the sample and/or ref name contain underscores, the regex
+                # may fail to properly distinguish them. To fix this problem,
+                # this code assumes that if sample and ref are given and the
+                # directory begins with sample_ref, then the directory is a
+                # correct match.
+                sample_ref_matched = True
+            else:
+                sample_ref_matched = False
+            valid_match = (
+                    (((sample == "" or str(sample) == match.group("sample")) and
+                    (ref == "" or str(ref) == match.group("ref"))) or
+                    sample_ref_matched) and
+                    (start == "" or str(start) == match.group("start")) and
+                    (end == "" or str(end) == match.group("end"))
+            )
+            if valid_match:
+                bitvectors_file = os.path.join(bitvector_files_dir, f)
+                return bitvectors_file
+    raise FileNotFoundError(f"The sample bit vector file could not be found in {bitvector_files_dir}")
+
+
+def filter_coverage(label, threshold, files):
+    """
+    Given a BitVector_Files directory, return the positions covered by at least {threshold} bit vectors.
+    params:
+    - bitvector_files_dir (str): directory in which to search for samples
+    - sample ... end (str): values of sample, reference genome, start position,
+      end position
+    returns:
+    - passed (list[int]): positions overlapped by >= threshold informative bit vectors
+    """
+    label_info = files.loc[label]
+    start = int(label_info.Start)
+    end = int(label_info.End)
+
+    bitvector_file = get_bitvector_file(label, label_info)
+    file_df = pd.read_table(bitvector_file, skiprows=2)
+    bitvectors_df = file_df.Bit_vector.apply(lambda x: pd.Series(list(x)))
+    bitvectors_df.columns = np.arange(start,end+1)
+    passed = list()
+    for idx in bitvectors_df.columns:
+        pileup_by_value = bitvectors_df[idx].value_counts()
+        if "?" in pileup_by_value.index:
+            pileup_by_value.drop("?", inplace=True)
+        if "." in pileup_by_value.index:
+            pileup_by_value.drop(".", inplace=True)
+        pileup_count = pileup_by_value.sum()
+        if pileup_count >= threshold:
+            passed.append(idx)
+    return passed
 
 
 def distance_distribution(vectors, metric, degree):
