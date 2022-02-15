@@ -26,7 +26,7 @@ from scipy.spatial import distance
 from scipy.stats import pearsonr, rankdata, spearmanr, mannwhitneyu
 from sklearn.metrics import roc_curve, roc_auc_score
 
-from rouls.seq_utils import get_ac_positions, read_fasta 
+from seq_utils import get_ac_positions, read_fasta 
 
 
 POP_AVG_MM = "Mismatches"

@@ -137,6 +137,14 @@ def write_multifasta(fasta_file, seqs, overwrite=False):
         f.write(text)
 
 
+def split_multifasta(fasta_file, overwrite=False):
+    fasta_dir = os.path.dirname(fasta_file)
+    seqs = read_multifasta(fasta_file)
+    for name, seq in seqs.items():
+        fasta_out = os.path.join(fasta_dir, f"{name}.fasta")
+        write_fasta(fasta_out, name, seq, overwrite=overwrite)
+
+
 info_bases = "ACGTUacgtu"
 def get_info_content(seq, fraction=False, inverse=False):
     """
