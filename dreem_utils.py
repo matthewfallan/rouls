@@ -142,6 +142,7 @@ def read_pop_avg(pop_avg_file, mm=False, mmdel=True, include_gu=True, seq=None,
       in each cluster (column)
     """
     pop_avg = pd.read_csv(pop_avg_file, sep="\t", index_col=POP_AVG_INDEX_COL)
+    pop_avg.drop(columns="Base", inplace=True)
     if not include_gu:
         pop_avg = remove_gu(pop_avg, seq, start_pos, warn_nonzero_gu=False)
     if mm and mmdel:
@@ -963,6 +964,8 @@ def get_cluster_proportions(run_dir):
     proportions.index = list(map(str, proportions.index))
     return proportions
 
+popavg_file_pattern = re.compile("(?P<sample>\S+)_(?P<ref>\S+)_(?P<start>\d+)"
+        "_(?P<end>\d+)_popavg_reacts.txt")
 
 def read_many_clusters_mu_files(sample_info, label_delim, norm_func=np.mean):
     """
@@ -986,70 +989,92 @@ def read_many_clusters_mu_files(sample_info, label_delim, norm_func=np.mean):
     for row in tqdm(sample_info.itertuples(index=True)):
         # Determine the matching directory.
         project_dir = os.path.join(row.Projects, row.Project)
-        em_clustering_dir = os.path.join(project_dir, row.EM_Clustering)
-        sample_dir = get_sample_dirs(em_clustering_dir, sample=row.Sample,
-                ref=row.Reference, start=row.Start, end=row.End,
-                info=row.InfoThresh, sig=row.SigThresh, inctg=row.IncTG,
-                dms=row.DMSThresh, multi="raise")
-        match = em_dirname_pattern.match(sample_dir.split("/")[-1])
-        if not match:
-            raise ValueError(f"misnamed directory: {sample_dir}")
-        match = match.groupdict()
-        # Patch in values for the sample and ref if they were given explicitly.
-        # This is in case the regex misidentified the sample or ref, which can
-        # happend if they contain underscores.
-        for field, value in {"sample": row.Sample,
-                "ref": row.Reference}.items():
-            if value != "":
-                match[field] = value
-        # Determine the directory of the run.
-        run_dir = get_run_dir(sample_dir, row.K, row.Run)
-        # Determine the path to the Clusters_Mu.txt file.
-        clusters_mu_file = os.path.join(run_dir, "Clusters_Mu.txt")
-        # Read the mutation rates.
-        if row.IncludeGU:
-            sample_mus = read_clusters_mu(clusters_mu_file,
-                    include_gu=row.IncludeGU)
-        else:
-            # If Gs and Us are excluded, need to also read the sequence.
-            seq_file = os.path.join(project_dir, "Ref_Genome",
-                    f"{match['ref']}.fasta")
-            name, seq = read_fasta(seq_file)
-            sample_mus = read_clusters_mu(clusters_mu_file,
-                    include_gu=row.IncludeGU, seq=seq)
-        if row.Cluster.strip() == "":
-            if len(sample_mus.columns) == 1:
-                # If cluster is not given but there is only one cluster,
-                # fill in the missing value using the only cluster.
-                cluster_label = sample_mus.columns[0]
-                missing_data[row.Index, "Cluster"] = cluster_label
+        if hasattr(row, "Pop_Avg") and row.Pop_Avg:
+            bv_plots_dir = os.path.join(project_dir, "BitVector_Plots")
+            file_path = os.path.join(bv_plots_dir, f"{row.Sample}_{row.Reference}_{row.Start}_{row.End}_popavg_reacts.txt")
+            if row.IncludeGU:
+                sample_mus = read_mutation_rates(file_path,
+                        include_gu=row.IncludeGU)
             else:
-                raise ValueError("Cluster must be specified if there are >1"
-                        " clusters.")
-        else:
-            cluster_label = row.Cluster
-        if cluster_label == "all":
-            cluster_mus = sample_mus
-        elif cluster_label in sample_mus.columns:
-            cluster_mus = sample_mus[cluster_label]
-        else:
-            raise ValueError(f"Cluster '{cluster_label}'"
-                    f" not in {clusters_mu_file}.")
-        # Read the cluster proportion.
-        proportions = get_cluster_proportions(run_dir)
-        if cluster_label == "all":
-            proportion = proportions[" Real pi "].tolist()
-        else:
-            proportion = proportions.loc[cluster_label, " Real pi "]
+                # If Gs and Us are excluded, need to also read the sequence.
+                seq_file = os.path.join(project_dir, "Ref_Genome",
+                        f"{row.Reference}.fasta")
+                name, seq = read_fasta(seq_file)
+#                print(f"read_mutation_rates('{file_path}', include_gu={row.IncludeGU}, seq='{seq}')")
+                sample_mus = read_mutation_rates(file_path,
+                        include_gu=row.IncludeGU, seq=seq)
+                match = popavg_file_pattern.match(file_path.split("/")[-1])
+        else:    
+            em_clustering_dir = os.path.join(project_dir, row.EM_Clustering)
+            sample_dir = get_sample_dirs(em_clustering_dir, sample=row.Sample,
+                    ref=row.Reference, start=row.Start, end=row.End,
+                    info=row.InfoThresh, sig=row.SigThresh, inctg=row.IncTG,
+                    dms=row.DMSThresh, multi="raise")
+            match = em_dirname_pattern.match(sample_dir.split("/")[-1])
+            if not match:
+                raise ValueError(f"misnamed directory: {sample_dir}")
+            match = match.groupdict()
+            # Patch in values for the sample and ref if they were given explicitly.
+            # This is in case the regex misidentified the sample or ref, which can
+            # happend if they contain underscores.
+            for field, value in {"sample": row.Sample,
+                    "ref": row.Reference}.items():
+                if value != "":
+                    match[field] = value
+            # Determine the directory of the run.
+            run_dir = get_run_dir(sample_dir, row.K, row.Run)
+            # Determine the path to the Clusters_Mu.txt file.
+            clusters_mu_file = os.path.join(run_dir, "Clusters_Mu.txt")
+            # Read the mutation rates.
+            if row.IncludeGU:
+                sample_mus = read_clusters_mu(clusters_mu_file,
+                        include_gu=row.IncludeGU)
+            else:
+                # If Gs and Us are excluded, need to also read the sequence.
+                seq_file = os.path.join(project_dir, "Ref_Genome",
+                        f"{match['ref']}.fasta")
+                name, seq = read_fasta(seq_file)
+                sample_mus = read_clusters_mu(clusters_mu_file,
+                        include_gu=row.IncludeGU, seq=seq)
+            if row.Cluster.strip() == "":
+                if len(sample_mus.columns) == 1:
+                    # If cluster is not given but there is only one cluster,
+                    # fill in the missing value using the only cluster.
+                    cluster_label = sample_mus.columns[0]
+                    missing_data[row.Index, "Cluster"] = cluster_label
+                else:
+                    raise ValueError("Cluster must be specified if there are >1"
+                            " clusters.")
+            else:
+                cluster_label = row.Cluster
+            if cluster_label == "all":
+                cluster_mus = sample_mus
+            elif cluster_label in sample_mus.columns:
+                cluster_mus = sample_mus[cluster_label]
+            else:
+                raise ValueError(f"Cluster '{cluster_label}'"
+                        f" not in {clusters_mu_file}.")
+            # Read the cluster proportion.
+            proportions = get_cluster_proportions(run_dir)
+            if cluster_label == "all":
+                proportion = proportions[" Real pi "].tolist()
+            else:
+                proportion = proportions.loc[cluster_label, " Real pi "]
         label = str(row.Index)  # Label was assigned to the index in plot_mus.
         if label_delim in label:
             raise ValueError(f"Delimiter '{label_delim}' in label '{label}'.")
         if label in mus:
             raise ValueError(f"Duplicate label: '{label}'")
         else:
-            mus[label] = cluster_mus
-            pis[label] = proportion
-            matches[label] = match
+            if hasattr(row, "Pop_Avg") and row.Pop_Avg:
+                mus[label] = sample_mus
+                pis[label] = None
+                #Handle matches obj correctly
+                matches[label] = {"ref":row.Reference}
+            else:
+                mus[label] = cluster_mus
+                pis[label] = proportion
+                matches[label] = match
         if row.NormRef != "":
             if row.NormRef not in sample_info.index:
                 raise ValueError("NormRef, if given, must be one of"
@@ -1127,7 +1152,17 @@ def plot_mus(plots_file, label_delim=", "):
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
     for row in tqdm(plots.itertuples()):
-        labels = str(row.Labels).split(label_delim)
+        if "; " in str(row.Labels):
+            replicate_data = True
+            replicates = dict()
+            rep_list = str(row.Labels).split("; ")
+            if len(rep_list) > 2:
+                raise AttributeError("Currently dreem_utils.py can only handle 2 replicates.")
+            for rep_num, replicate in enumerate(rep_list,1):
+                replicates[rep_num] = replicate.split(label_delim)
+        else:
+            replicate_data = False
+            labels = str(row.Labels).split(label_delim)
         out_file = str(row.File)
         if str(row.Options).strip() != "":
             options = json.loads(str(row.Options))
@@ -1137,8 +1172,12 @@ def plot_mus(plots_file, label_delim=", "):
             # Set matplotlib parameters if specified.
             for key, value in options[MATPLOTLIB_RC_PARAM_KEY].items():
                 matplotlib.rcParams[key] = value
+        if replicate_data:
+            labels = list()
+            for rep_num in replicates:
+                labels += replicates[rep_num]
         sub_mus = {l: mus[l] for l in labels}
-        if hasattr(row, "Threshold"):
+        if hasattr(row, "Threshold") and not int(row.Threshold) == 0:
             threshold = int(row.Threshold)
             for label in sub_mus:
                 idxs = filter_coverage(label, threshold, files)
@@ -1150,7 +1189,6 @@ def plot_mus(plots_file, label_delim=", "):
             diffplot_mus(labels, sub_mus, pis, matches, files, out_file,
                     **options)
         elif row.Type == "scatter":
-
             scatterplot_mus(labels, sub_mus, pis, matches, files, out_file,
                     **options)
         elif row.Type == "scatmat":
@@ -1184,14 +1222,36 @@ def plot_mus(plots_file, label_delim=", "):
             except AttributeError:
                 print("Contcorr plots require the 'Window' column is populated.")
                 sys.exit()
-            groups_dict = {groups[0]:(labels[0], labels[1], labels[2]),groups[1]:(labels[3], labels[4], labels[5])}
+            groups_dict = dict()
+            if replicate_data:
+                if len(replicates[1])%2 != 0:
+                    raise AttributeError("You must have and equal number of files in each group.")
+                merge_num = len(replicates[1])/2
+                for rep_num in replicates:
+                    i = 0
+                    for group_num, group in enumerate(groups, 1):
+                        groups_dict[f"{group}_{str(rep_num)}"] = list()
+                        while i < merge_num*group_num:
+                            groups_dict[f"{group}_{str(rep_num)}"].append(replicates[rep_num][i])
+                            i+=1
+            else:
+                if len(labels)%2 != 0:
+                    raise AttributeError("You must have and equal number of files per group.")
+                merge_num = len(labels)/2
+                i = 0
+                for group in groups:
+                    groups_dict[group] = list()
+                    while i < merge_num:
+                        groups_dict[group].append(labels[i])
+                        i+=1
+                    merge_num = merge_num*2
             merged_mus = merge_mus(sub_mus, groups_dict)
             #Collect one file label per group (each group shares a .fasta) for sequence matching.
             file_labels = []
             for group in groups_dict:
                 file_labels.append(groups_dict[group][0])
             new_labels = list(merged_mus.keys())
-            contcorr_mus(sample, new_labels, merged_mus, window, pis, matches, file_labels, files, out_file, **options)
+            contcorr_mus(sample, new_labels, merged_mus, replicate_data, window, pis, matches, file_labels, files, out_file, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
@@ -1207,6 +1267,7 @@ def merge_mus(sub_mus, merge_groups):
         group_mus = dict()
         for label in label_list:
             group_mus[label] = sub_mus[label]
+        #Merge entire range, missing positions populated with 0
         # index_range = []
         # for mu in group_mus:
         #     for index in group_mus[mu].index.values:
@@ -1637,7 +1698,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     l1, l2, l3, l4 = labels
     
     if groups is None:
-        groups = [f"{l1}_vs_{l2}", f"{l3}_vs_{l4}", f"{l1}_vs_{l3}", f"{l2}_vs_{l4}"]
+        groups = [f"{l1}_vs_{l3}", f"{l2}_vs_{l4}", f"{l1}_vs_{l2}", f"{l3}_vs_{l4}"]
     else:
         group1, group2 = groups
         groups = [f"{group1}1_vs_{group1}2", f"{group2}1_vs_{group2}2", f"{group1}1_vs_{group2}1", f"{group1}2_vs_{group2}2"]
@@ -1744,7 +1805,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     plt.close()
 
 
-def contcorr_mus(sample, labels, mus, window, pis, matches, file_labels, files, out_file,
+def contcorr_mus(sample, labels, mus, replicate_data, window, pis, matches, file_labels, files, out_file,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -1759,76 +1820,81 @@ def contcorr_mus(sample, labels, mus, window, pis, matches, file_labels, files, 
       indexes must have the same length in order to know which points from mu1
       and mu2 correspond to each other.
     """
-    if len(labels) != 2:
-        raise ValueError("contcorr_mus requires exactly two labels")
-    l1, l2 = labels
-    fl1, fl2 = file_labels
-    seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
-            files.loc[fl1, "Project"], "Ref_Genome",
-            f"{matches[fl1]['ref']}.fasta")
-    seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
-            files.loc[fl2, "Project"], "Ref_Genome",
-            f"{matches[fl2]['ref']}.fasta")
-    name_1, seq_1 = read_fasta(seq_file_1)
-    name_2, seq_2 = read_fasta(seq_file_2)
-    seqs = {l1: seq_1, l2: seq_2}
-    mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
-    mu1, mu2 = mus[l1], mus[l2]
-    mu1 = mu1 / mu1.max()
-    mu2 = mu2 / mu2.max()
-    fig, ax = plt.subplots()
-    if base_color:
-        colors_1 = [BASE_COLORS[seq_1[pos - 1]] for pos in mu1.index]
-        colors_2 = [BASE_COLORS[seq_2[pos - 1]] for pos in mu2.index]
-        if colors_1 != colors_2:
-            raise ValueError("Cannot color bases if sequences do not match.")
-        colors = colors_1
-    else:
-        colors = None
-    data_dict = dict() 
 
-    indices = list(mu1.index)
-    start = 0
-    for modified_base_num, position in enumerate(mu1):
-        end = start+window
-        pearson_corr, pearson_pval = pearsonr(mu1[start:end], mu2[start:end])
-        if end >= len(indices):
-            end = len(indices)-1
+    def process_mus(mus, labels, file_labels):
+        seqs = dict()
+        for label, file_label in zip(labels, file_labels):
+            seq_file = os.path.join(files.loc[file_label, "Projects"],
+            files.loc[file_label, "Project"], "Ref_Genome",
+            f"{matches[file_label]['ref']}.fasta")
+            name, seq = read_fasta(seq_file)
+            seqs[label] = seq
+        return align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
+    
+    def plot(group, mus):
+        data_dict = dict()
+        mu1, mu2 = mus
+        mu1 = mu1 / mu1.max()
+        mu2 = mu2 / mu2.max()
+        indices = list(mu1.index)
+        start = 0
+        for modified_base_num, position in enumerate(mu1):
+            end = start+window
+            pearson_corr, pearson_pval = pearsonr(mu1[start:end], mu2[start:end])
+            if end >= len(indices):
+                end = len(indices)-1
+                middle = (indices[end]-indices[start])/2+indices[start]
+                data_dict[middle] = pearson_corr**2
+                break
             middle = (indices[end]-indices[start])/2+indices[start]
             data_dict[middle] = pearson_corr**2
-            break
-        middle = (indices[end]-indices[start])/2+indices[start]
-        data_dict[middle] = pearson_corr**2
-        start += 1
-    ax.plot(data_dict.keys(), data_dict.values())
-    if equal_axes:
-        if x_max is None and y_max is None:
-            max_val = max(mu1.max(), mu2.max())
-            xy_lim = max_val * (1 + margin)
-            x_max = xy_lim
-            y_max = xy_lim
-        else:
-            if x_max is not None and y_max is not None:
-                if not np.isclose(x_max, y_max):
-                    raise ValueError("If equal axes and x_max and y_max are given, then x_max must equal y_max")
-            elif x_max is not None:
-                y_max = x_max
-            else:
-                x_max = y_max
+            start += 1
+        ax.plot(data_dict.keys(), data_dict.values(), label=group)
+        # if equal_axes:
+        #     if x_max is None and y_max is None:
+        #         max_val = max(mu1.max(), mu2.max())
+        #         xy_lim = max_val * (1 + margin)
+        #         x_max = xy_lim
+        #         y_max = xy_lim
+        #     else:
+        #         if x_max is not None and y_max is not None:
+        #             if not np.isclose(x_max, y_max):
+        #                 raise ValueError("If equal axes and x_max and y_max are given, then x_max must equal y_max")
+        #         elif x_max is not None:
+        #             y_max = x_max
+        #         else:
+        #             x_max = y_max
+        # else:
+        #     if x_max is None:
+        #         x_max = mu1.max() * (1 + margin)
+        #     if y_max is None:
+        #         y_max = mu2.max() * (1 + margin)
+
+    fig, ax = plt.subplots()
+    processed_mus = process_mus(mus, labels, file_labels)
+    
+    labels = list(processed_mus.keys())
+
+    #Plot all combinations in an unintuitive order
+    # combinations = itertools.combinations(processed_mus, 2)
+    # for combination in combinations:
+    #     print(sorted(combinations))
+    #     comparison = f"{combination[0]}_vs_{combination[1]}"
+    #     mus = [processed_mus[combination[0]], processed_mus[combination[1]]]
+    #     plot(comparison, mus)
+
+    if replicate_data:
+        
+        plot(f"{labels[0]}_vs_{labels[2]}", [processed_mus[labels[0]], processed_mus[labels[2]]])
+        plot(f"{labels[1]}_vs_{labels[3]}", [processed_mus[labels[1]], processed_mus[labels[3]]])
+        plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
+        plot(f"{labels[2]}_vs_{labels[3]}", [processed_mus[labels[2]], processed_mus[labels[3]]])
+        plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
+        plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
     else:
-        if x_max is None:
-            x_max = mu1.max() * (1 + margin)
-        if y_max is None:
-            y_max = mu2.max() * (1 + margin)
-    # if square_plot:
-    #     ax.set_aspect(x_max / y_max)
-    # ax.set_xlim((0, x_max))
-    # ax.set_ylim((0, y_max))
-    # corr_text = list()
-    # if coeff_det:
-    #     pearson_corr, pearson_pval = pearsonr(mu1, mu2)
-    #     corr_text.append(f"R^2 = {round(pearson_corr**2, 5)}"
-    #             f" (logP = {round(np.log10(pearson_pval), 5)})")
+        plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
+        
+    plt.legend()
     ax.set_ylim(0, 1.1)
     if xlabel is None:
         xlabel = "Position (bp)"
@@ -1839,7 +1905,7 @@ def contcorr_mus(sample, labels, mus, window, pis, matches, file_labels, files, 
     if title is not None:
         ax.set_title(title)
     else:
-        ax.set_title(f"{sample} DMS Reactivity Correlation {l1.capitalize()} vs {l2.capitalize()}")
+        ax.set_title(f"{sample} DMS Reactivity Correlation")
     fig.tight_layout()
     plt.savefig(out_file)
     plt.close()
