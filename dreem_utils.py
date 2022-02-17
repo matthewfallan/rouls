@@ -1227,6 +1227,10 @@ def plot_mus(plots_file, label_delim=", "):
             groups_dict = dict()
             if replicate_data:
                 replicate_groups = str(row.Labels).split("; ")
+                if ", " not in labels_value:
+                    single_replicate = True
+                else:
+                    single_replicate = False
                 for rep_num, replicate_group in enumerate(replicate_groups, 1):
                     group_labels = replicate_group.split(", ")
                     for group_num, group_label in enumerate(group_labels):
@@ -1237,6 +1241,8 @@ def plot_mus(plots_file, label_delim=", "):
                             groups_dict[f"{groups[group_num]}_{str(rep_num)}"].append(group_label)
             else:
                 group_labels = str(row.Labels).split(", ")
+                if len(groups) < len(group_labels):
+                    raise AttributeError('Are you trying to plot a single pair replicates? Use a semicolon to separate labels and specify only one group in the "Groups" column. If not, use a comma to separate two groups. These must be specified in the "Groups" column.')
                 for group_num, group_label in enumerate(group_labels):
                     groups_dict[groups[group_num]] = list()
                     if " + " in group_label:
@@ -1249,7 +1255,7 @@ def plot_mus(plots_file, label_delim=", "):
             for group in groups_dict:
                 file_labels.append(groups_dict[group][0])
             new_labels = list(merged_mus.keys())
-            contcorr_mus(sample, new_labels, merged_mus, replicate_data, matched_replicates, window, pis, matches, file_labels, files, out_file, **options)
+            contcorr_mus(sample, new_labels, merged_mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
@@ -1803,7 +1809,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     plt.close()
 
 
-def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, window, pis, matches, file_labels, files, out_file,
+def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -1882,13 +1888,16 @@ def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, window
     #     plot(comparison, mus)
 
     if replicate_data:
-        plot(f"{labels[0]}_vs_{labels[2]}", [processed_mus[labels[0]], processed_mus[labels[2]]])
-        plot(f"{labels[1]}_vs_{labels[3]}", [processed_mus[labels[1]], processed_mus[labels[3]]])
-        plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
-        plot(f"{labels[2]}_vs_{labels[3]}", [processed_mus[labels[2]], processed_mus[labels[3]]])
-        if matched_replicates:
-            plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
-            plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
+        if single_replicate:
+            plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
+        else:
+            plot(f"{labels[0]}_vs_{labels[2]}", [processed_mus[labels[0]], processed_mus[labels[2]]])
+            plot(f"{labels[1]}_vs_{labels[3]}", [processed_mus[labels[1]], processed_mus[labels[3]]])
+            plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
+            plot(f"{labels[2]}_vs_{labels[3]}", [processed_mus[labels[2]], processed_mus[labels[3]]])
+            if matched_replicates:
+                plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
+                plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
     else:
         plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
         
