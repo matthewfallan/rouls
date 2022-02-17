@@ -1152,17 +1152,20 @@ def plot_mus(plots_file, label_delim=", "):
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
     for row in tqdm(plots.itertuples()):
-        if "; " in str(row.Labels):
+        labels_value = str(row.Labels).replace(" + ", ", ")
+        if "; " in labels_value:
             replicate_data = True
             replicates = dict()
-            rep_list = str(row.Labels).split("; ")
+            labels = list()
+            rep_list = labels_value.split("; ")
             if len(rep_list) > 2:
                 raise AttributeError("Currently dreem_utils.py can only handle 2 replicates.")
             for rep_num, replicate in enumerate(rep_list,1):
                 replicates[rep_num] = replicate.split(label_delim)
+                labels += replicates[rep_num]  
         else:
             replicate_data = False
-            labels = str(row.Labels).split(label_delim)
+            labels = labels_value.split(label_delim)
         out_file = str(row.File)
         if str(row.Options).strip() != "":
             options = json.loads(str(row.Options))
@@ -1172,10 +1175,6 @@ def plot_mus(plots_file, label_delim=", "):
             # Set matplotlib parameters if specified.
             for key, value in options[MATPLOTLIB_RC_PARAM_KEY].items():
                 matplotlib.rcParams[key] = value
-        if replicate_data:
-            labels = list()
-            for rep_num in replicates:
-                labels += replicates[rep_num]
         sub_mus = {l: mus[l] for l in labels}
         if hasattr(row, "Threshold") and not int(row.Threshold) == 0:
             threshold = int(row.Threshold)
@@ -1203,10 +1202,13 @@ def plot_mus(plots_file, label_delim=", "):
             try:
                 sample = str(row.Sample)
             except AttributeError:
-                print("Corrbar plots require the sample column is populated.")
-                sys.exit()
+                raise AttributeError("Corrbar plots require the sample column is populated.")
             corrbar_mus(sample, labels, groups, sub_mus, pis, matches, files, out_file, **options)
         elif row.Type == "contcorr":
+            if hasattr(row, "Matched_Replicates"):
+                matched_replicates = row.Matched_Replicates
+            else:
+                matched_replicates = False
             groups = None
             if not hasattr(row, "Groups"):
                 raise AttributeError("Groups column is required for merging.")
@@ -1224,34 +1226,30 @@ def plot_mus(plots_file, label_delim=", "):
                 sys.exit()
             groups_dict = dict()
             if replicate_data:
-                if len(replicates[1])%2 != 0:
-                    raise AttributeError("You must have and equal number of files in each group.")
-                merge_num = len(replicates[1])/2
-                for rep_num in replicates:
-                    i = 0
-                    for group_num, group in enumerate(groups, 1):
-                        groups_dict[f"{group}_{str(rep_num)}"] = list()
-                        while i < merge_num*group_num:
-                            groups_dict[f"{group}_{str(rep_num)}"].append(replicates[rep_num][i])
-                            i+=1
+                replicate_groups = str(row.Labels).split("; ")
+                for rep_num, replicate_group in enumerate(replicate_groups, 1):
+                    group_labels = replicate_group.split(", ")
+                    for group_num, group_label in enumerate(group_labels):
+                        groups_dict[f"{groups[group_num]}_{str(rep_num)}"] = list()
+                        if " + " in group_label:
+                            groups_dict[f"{groups[group_num]}_{str(rep_num)}"] += group_label.split(" + ")
+                        else:
+                            groups_dict[f"{groups[group_num]}_{str(rep_num)}"].append(group_label)
             else:
-                if len(labels)%2 != 0:
-                    raise AttributeError("You must have and equal number of files per group.")
-                merge_num = len(labels)/2
-                i = 0
-                for group in groups:
-                    groups_dict[group] = list()
-                    while i < merge_num:
-                        groups_dict[group].append(labels[i])
-                        i+=1
-                    merge_num = merge_num*2
+                group_labels = str(row.Labels).split(", ")
+                for group_num, group_label in enumerate(group_labels):
+                    groups_dict[groups[group_num]] = list()
+                    if " + " in group_label:
+                        groups_dict[groups[group_num]] += group_label.split(" + ")
+                    else:
+                        groups_dict[groups[group_num]].append(group_label)
             merged_mus = merge_mus(sub_mus, groups_dict)
             #Collect one file label per group (each group shares a .fasta) for sequence matching.
             file_labels = []
             for group in groups_dict:
                 file_labels.append(groups_dict[group][0])
             new_labels = list(merged_mus.keys())
-            contcorr_mus(sample, new_labels, merged_mus, replicate_data, window, pis, matches, file_labels, files, out_file, **options)
+            contcorr_mus(sample, new_labels, merged_mus, replicate_data, matched_replicates, window, pis, matches, file_labels, files, out_file, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
@@ -1805,7 +1803,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     plt.close()
 
 
-def contcorr_mus(sample, labels, mus, replicate_data, window, pis, matches, file_labels, files, out_file,
+def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, window, pis, matches, file_labels, files, out_file,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -1884,13 +1882,13 @@ def contcorr_mus(sample, labels, mus, replicate_data, window, pis, matches, file
     #     plot(comparison, mus)
 
     if replicate_data:
-        
         plot(f"{labels[0]}_vs_{labels[2]}", [processed_mus[labels[0]], processed_mus[labels[2]]])
         plot(f"{labels[1]}_vs_{labels[3]}", [processed_mus[labels[1]], processed_mus[labels[3]]])
         plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
         plot(f"{labels[2]}_vs_{labels[3]}", [processed_mus[labels[2]], processed_mus[labels[3]]])
-        plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
-        plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
+        if matched_replicates:
+            plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
+            plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
     else:
         plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
         
