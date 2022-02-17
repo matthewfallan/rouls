@@ -1143,11 +1143,16 @@ def plot_mus(plots_file, label_delim=", "):
             "EM_Clustering": str, "Sample": str, "Reference": str, "Start": str,
             "End": str, "InfoThresh": str, "SigThresh": str, "IncTG": str,
             "DMSThresh": str, "K": str, "Run": str, "Cluster": str,
-            "IncludeGU": bool, "NormData": str}
+            "IncludeGU": bool, "NormData": str, "Coronavirus": str,
+            "BitVector_Files": str, "Pop_Avg": bool}
+    plots_dtypes = {"Type": str, "Labels": str, "File": str,
+            "Options": str, "Sample": str, "Length": str,
+            "Groups": str, "Window": int, "Threshold": int,
+            "Matched_Replicates": bool}
     files = pd.read_excel(plots_file, sheet_name="Files",
             dtype=files_dtypes, index_col="Label", na_filter=False)
     plots = pd.read_excel(plots_file, sheet_name="Plots",
-            dtype=str).fillna(value="")
+            dtype=plots_dtypes).fillna(value="")
     mus, pis, matches = read_many_clusters_mu_files(files, label_delim)
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
@@ -1166,9 +1171,9 @@ def plot_mus(plots_file, label_delim=", "):
         else:
             replicate_data = False
             labels = labels_value.split(label_delim)
-        out_file = str(row.File)
-        if str(row.Options).strip() != "":
-            options = json.loads(str(row.Options))
+        out_file = row.File
+        if row.Options.strip() != "":
+            options = json.loads(row.Options)
         else:
             options = dict()
         if MATPLOTLIB_RC_PARAM_KEY in options:
@@ -1176,8 +1181,8 @@ def plot_mus(plots_file, label_delim=", "):
             for key, value in options[MATPLOTLIB_RC_PARAM_KEY].items():
                 matplotlib.rcParams[key] = value
         sub_mus = {l: mus[l] for l in labels}
-        if hasattr(row, "Threshold") and not int(row.Threshold) == 0:
-            threshold = int(row.Threshold)
+        if hasattr(row, "Threshold") and not row.Threshold == 0:
+            threshold = row.Threshold
             for label in sub_mus:
                 idxs = filter_coverage(label, threshold, files)
                 sub_mus[label] = sub_mus[label][sub_mus[label].index.intersection(idxs)]
@@ -1196,11 +1201,11 @@ def plot_mus(plots_file, label_delim=", "):
         elif row.Type == "corrbar":
             groups = None
             if hasattr(row, "Groups"):
-                groups = str(row.Groups).split(label_delim)
+                groups = row.Groups.split(label_delim)
                 if len(groups) != 2:
                     print("There are not 2 groups, running without user defined group labels.")
             try:
-                sample = str(row.Sample)
+                sample = row.Sample
             except AttributeError:
                 raise AttributeError("Corrbar plots require the sample column is populated.")
             corrbar_mus(sample, labels, groups, sub_mus, pis, matches, files, out_file, **options)
@@ -1213,9 +1218,9 @@ def plot_mus(plots_file, label_delim=", "):
             if not hasattr(row, "Groups"):
                 raise AttributeError("Groups column is required for merging.")
             else:
-                groups = str(row.Groups).split(label_delim)
+                groups = row.Groups.split(label_delim)
             try:
-                sample = str(row.Sample)
+                sample = row.Sample
             except AttributeError:
                 print("Contcorr plots require the sample column is populated.")
                 sys.exit()
@@ -1225,12 +1230,11 @@ def plot_mus(plots_file, label_delim=", "):
                 print("Contcorr plots require the 'Window' column is populated.")
                 sys.exit()
             groups_dict = dict()
+            single_replicate = False
             if replicate_data:
-                replicate_groups = str(row.Labels).split("; ")
+                replicate_groups = row.Labels.split("; ")
                 if ", " not in labels_value:
                     single_replicate = True
-                else:
-                    single_replicate = False
                 for rep_num, replicate_group in enumerate(replicate_groups, 1):
                     group_labels = replicate_group.split(", ")
                     for group_num, group_label in enumerate(group_labels):
@@ -1240,7 +1244,7 @@ def plot_mus(plots_file, label_delim=", "):
                         else:
                             groups_dict[f"{groups[group_num]}_{str(rep_num)}"].append(group_label)
             else:
-                group_labels = str(row.Labels).split(", ")
+                group_labels = row.Labels.split(", ")
                 if len(groups) < len(group_labels):
                     raise AttributeError('Are you trying to plot a single pair replicates? Use a semicolon to separate labels and specify only one group in the "Groups" column. If not, use a comma to separate two groups. These must be specified in the "Groups" column.')
                 for group_num, group_label in enumerate(group_labels):
@@ -1895,7 +1899,7 @@ def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, single
             plot(f"{labels[1]}_vs_{labels[3]}", [processed_mus[labels[1]], processed_mus[labels[3]]])
             plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
             plot(f"{labels[2]}_vs_{labels[3]}", [processed_mus[labels[2]], processed_mus[labels[3]]])
-            if matched_replicates:
+            if not matched_replicates:
                 plot(f"{labels[0]}_vs_{labels[3]}", [processed_mus[labels[0]], processed_mus[labels[3]]])
                 plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
     else:
