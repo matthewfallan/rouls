@@ -1070,10 +1070,11 @@ def read_many_clusters_mu_files(sample_info, label_delim, norm_func=np.mean):
                 mus[label] = sample_mus
                 pis[label] = None
                 #Handle matches obj correctly
-                matches[label] = {"ref":row.Reference}
+                matches[label] = {"ref":row.Reference, "sample":row.Sample, "Pop_Avg":True}
             else:
                 mus[label] = cluster_mus
                 pis[label] = proportion
+                match["Pop_Avg"] = False
                 matches[label] = match
         if row.NormRef != "":
             if row.NormRef not in sample_info.index:
@@ -1148,7 +1149,7 @@ def plot_mus(plots_file, label_delim=", "):
     plots_dtypes = {"Type": str, "Labels": str, "File": str,
             "Options": str, "Sample": str, "Length": str,
             "Groups": str, "Window": int, "Threshold": int,
-            "Matched_Replicates": bool}
+            "Matched_Replicates": bool, "Annotate": str}
     files = pd.read_excel(plots_file, sheet_name="Files",
             dtype=files_dtypes, index_col="Label", na_filter=False)
     plots = pd.read_excel(plots_file, sheet_name="Plots",
@@ -1157,7 +1158,13 @@ def plot_mus(plots_file, label_delim=", "):
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
     for row in tqdm(plots.itertuples()):
-        labels_value = str(row.Labels).replace(" + ", ", ")
+        if hasattr(row, "Matched_Replicates"):
+            matched_replicates = row.Matched_Replicates
+        else:
+            matched_replicates = False
+        if " + " in row.Labels:
+            merged = True
+            labels_value = row.Labels.replace(" + ", ", ")
         if "; " in labels_value:
             replicate_data = True
             replicates = dict()
@@ -1167,7 +1174,7 @@ def plot_mus(plots_file, label_delim=", "):
                 raise AttributeError("Currently dreem_utils.py can only handle 2 replicates.")
             for rep_num, replicate in enumerate(rep_list,1):
                 replicates[rep_num] = replicate.split(label_delim)
-                labels += replicates[rep_num]  
+                labels += replicates[rep_num]
         else:
             replicate_data = False
             labels = labels_value.split(label_delim)
@@ -1181,22 +1188,52 @@ def plot_mus(plots_file, label_delim=", "):
             for key, value in options[MATPLOTLIB_RC_PARAM_KEY].items():
                 matplotlib.rcParams[key] = value
         sub_mus = {l: mus[l] for l in labels}
+        sub_mus, groups_dict, single_replicate, merged = parse_groups(sub_mus, row, replicate_data)
+        #Collect one file label per group (each group shares a .fasta) for sequence matching.
+        file_labels = list()
+        for group in groups_dict:
+            file_labels.append(groups_dict[group][0])
+        labels = list(sub_mus.keys())
+        if hasattr(row, "Annotate") and not row.Annotate == '':
+            annot_start, annot_end = row.Annotate.split(", ")
+            annot = (int(annot_start), int(annot_end))
+        else:
+            annot = (0,0)
+
+        correlation = ""
+        if hasattr(row, "Correlation"):
+            if row.Correlation == "spearman":
+                correlation = "spearman"
+            elif row.Correlation == "pearson":
+                correlation = "pearson"
+
         if hasattr(row, "Threshold") and not row.Threshold == 0:
             threshold = row.Threshold
             for label in sub_mus:
                 idxs = filter_coverage(label, threshold, files)
                 sub_mus[label] = sub_mus[label][sub_mus[label].index.intersection(idxs)]
+
         if row.Type == "bar":
-            barplot_mus(labels, sub_mus, pis, matches, files, out_file,
+            if replicate_data:
+                raise AttributeError("bar plots cannot handle replicates.")
+            barplot_mus(file_labels, labels, sub_mus, merged, pis, matches, files, out_file, annot,
                     **options)
         elif row.Type == "diffbar":
-            diffplot_mus(labels, sub_mus, pis, matches, files, out_file,
+            if replicate_data:
+                raise AttributeError("diffbar plots cannot handle replicates.")
+            diffplot_mus(file_labels, labels, sub_mus, merged, pis, matches, files, out_file, annot,
                     **options)
         elif row.Type == "scatter":
-            scatterplot_mus(labels, sub_mus, pis, matches, files, out_file,
+            if replicate_data:
+                raise AttributeError("scatterplots cannot handle replicates.")
+            scatterplot_mus(file_labels, labels, sub_mus, merged, pis, matches, files, out_file, annot,
                     **options)
         elif row.Type == "scatmat":
-            scatterplot_matrix_mus(labels, sub_mus, pis, matches, files,
+            if replicate_data:
+                raise AttributeError("scatmat plots cannot handle replicates.")
+            if merged:
+                raise AttributeError("scatmat plots cannot handle merged data.")
+            scatterplot_matrix_mus(file_labels, labels, sub_mus, pis, matches, files,
                     out_file, **options)
         elif row.Type == "corrbar":
             groups = None
@@ -1208,60 +1245,56 @@ def plot_mus(plots_file, label_delim=", "):
                 sample = row.Sample
             except AttributeError:
                 raise AttributeError("Corrbar plots require the sample column is populated.")
-            corrbar_mus(sample, labels, groups, sub_mus, pis, matches, files, out_file, **options)
+            corrbar_mus(correlation, sample, file_labels, labels, groups, sub_mus, matched_replicates, pis, matches, files, out_file, **options)
         elif row.Type == "contcorr":
-            if hasattr(row, "Matched_Replicates"):
-                matched_replicates = row.Matched_Replicates
-            else:
-                matched_replicates = False
-            groups = None
-            if not hasattr(row, "Groups"):
-                raise AttributeError("Groups column is required for merging.")
-            else:
-                groups = row.Groups.split(label_delim)
             try:
                 sample = row.Sample
             except AttributeError:
-                print("Contcorr plots require the sample column is populated.")
-                sys.exit()
+                raise AttributeError("Contcorr plots require the sample column is populated.")
             try:
                 window = int(row.Window)
             except AttributeError:
-                print("Contcorr plots require the 'Window' column is populated.")
-                sys.exit()
-            groups_dict = dict()
-            single_replicate = False
-            if replicate_data:
-                replicate_groups = row.Labels.split("; ")
-                if ", " not in labels_value:
-                    single_replicate = True
-                for rep_num, replicate_group in enumerate(replicate_groups, 1):
-                    group_labels = replicate_group.split(", ")
-                    for group_num, group_label in enumerate(group_labels):
-                        groups_dict[f"{groups[group_num]}_{str(rep_num)}"] = list()
-                        if " + " in group_label:
-                            groups_dict[f"{groups[group_num]}_{str(rep_num)}"] += group_label.split(" + ")
-                        else:
-                            groups_dict[f"{groups[group_num]}_{str(rep_num)}"].append(group_label)
-            else:
-                group_labels = row.Labels.split(", ")
-                if len(groups) < len(group_labels):
-                    raise AttributeError('Are you trying to plot a single pair replicates? Use a semicolon to separate labels and specify only one group in the "Groups" column. If not, use a comma to separate two groups. These must be specified in the "Groups" column.')
-                for group_num, group_label in enumerate(group_labels):
-                    groups_dict[groups[group_num]] = list()
-                    if " + " in group_label:
-                        groups_dict[groups[group_num]] += group_label.split(" + ")
-                    else:
-                        groups_dict[groups[group_num]].append(group_label)
-            merged_mus = merge_mus(sub_mus, groups_dict)
-            #Collect one file label per group (each group shares a .fasta) for sequence matching.
-            file_labels = []
-            for group in groups_dict:
-                file_labels.append(groups_dict[group][0])
-            new_labels = list(merged_mus.keys())
-            contcorr_mus(sample, new_labels, merged_mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, **options)
+                raise AttributeError("Contcorr plots require the 'Window' column is populated.")
+            contcorr_mus(correlation, sample, labels, sub_mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, annot, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
+
+def parse_groups(sub_mus, row, replicate_data):
+    groups_dict = dict()
+    if " + " in row.Labels:
+        merged = True
+    else:
+        merged = False
+    if hasattr(row, "Groups"):
+        groups = row.Groups.split(", ")
+    else:
+        if " + " in row.Labels:
+            raise AttributeError("Groups column is required for merging.")
+        groups = row.Labels.split(label_delim)
+    single_replicate = False
+    if replicate_data:
+        replicate_groups = row.Labels.split("; ")
+        if ", " not in row.Labels:
+            single_replicate = True
+        for rep_num, replicate_group in enumerate(replicate_groups, 1):
+            group_labels = replicate_group.split(", ")
+            for group_num, group_label in enumerate(group_labels):
+                groups_dict[f"{groups[group_num]}_{str(rep_num)}"] = list()
+                if " + " in group_label:
+                    groups_dict[f"{groups[group_num]}_{str(rep_num)}"] += group_label.split(" + ")
+                else:
+                    groups_dict[f"{groups[group_num]}_{str(rep_num)}"].append(group_label)
+    else:
+        group_labels = row.Labels.split(", ")
+        if len(groups) < len(group_labels):
+            raise AttributeError('Are you trying to plot a single pair replicates? Use a semicolon to separate labels and specify only one group in the "Groups" column. If not, use a comma to separate two groups. These must be specified in the "Groups" column.')
+        for group_num, group_label in enumerate(group_labels):
+            groups_dict[groups[group_num]] = list()
+            if " + " in group_label:
+                groups_dict[groups[group_num]] += group_label.split(" + ")
+            else:
+                groups_dict[groups[group_num]].append(group_label)
+    return merge_mus(sub_mus, groups_dict), groups_dict, single_replicate, merged
 
 def merge_mus(sub_mus, merge_groups):
     """
@@ -1369,24 +1402,25 @@ def align_mus(mus, matched_indexes=True, ignore_index=False, seqs=None):
     return mus
 
 
-def diffplot_mus(labels, mus, pis, matches, files, out_file,
+def diffplot_mus(file_labels, group_labels, mus, merged, pis, matches, files, out_file, annot,
         base_color=True, title=None, xlabel="Position", ylabel="∆ DMS signal",
         label_titles=False, matched_indexes=True, centered=True, dim_ratio=4,
         **kwargs):
-    if len(labels) != 2:
+    if len(group_labels) != 2:
         raise ValueError("diffplot_mus requires exactly two values")
-    l1, l2 = labels
+    fl1, fl2 = file_labels
+    l1, l2 = group_labels
     mus = align_mus(mus, matched_indexes=matched_indexes,
             ignore_index=not matched_indexes)
     mu1, mu2 = mus[l1], mus[l2]
     diff = mu1 - mu2
     if base_color:
-        seq_file_1 = os.path.join(files.loc[l1, "Projects"],
-                files.loc[l1, "Project"], "Ref_Genome",
-                f"{matches[l1]['ref']}.fasta")
-        seq_file_2 = os.path.join(files.loc[l2, "Projects"],
-                files.loc[l2, "Project"], "Ref_Genome",
-                f"{matches[l2]['ref']}.fasta")
+        seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
+                files.loc[fl1, "Project"], "Ref_Genome",
+                f"{matches[fl1]['ref']}.fasta")
+        seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
+                files.loc[fl2, "Project"], "Ref_Genome",
+                f"{matches[fl2]['ref']}.fasta")
         name_1, seq_1 = read_fasta(seq_file_1)
         name_2, seq_2 = read_fasta(seq_file_2)
         colors_1 = [BASE_COLORS[seq_1[pos - 1]] for pos in mu1.index]
@@ -1399,14 +1433,20 @@ def diffplot_mus(labels, mus, pis, matches, files, out_file,
     fig, ax = plt.subplots()
     ax.bar(diff.index, diff, color=colors)
     axis_title = list()
-    for label in labels:
+    for label_num, label in enumerate(group_labels):
         if label_titles:
             axis_title.append(label)
         else:
-            row = files.loc[label, :]
-            match = matches[label]
-            axis_title.append(f"{match['sample']}: K {row['K']}, cluster"
-                    f" {row['Cluster']} (p={pis[label]}), run {row['Run']}")
+            row = files.loc[file_labels[label_num], :]
+            match = matches[file_labels[label_num]]
+            if not match["Pop_Avg"]:
+                if not merged:
+                    axis_title.append(f"{match['sample']}: K {row['K']}, cluster"
+                            f" {row['Cluster']} (p={pis[file_labels[label_num]]}), run {row['Run']}")
+                else:
+                    axis_title.append(f"{match['sample']}: Merged")
+            else:
+                axis_title.append(row.Sample)
     axis_title = " - ".join(axis_title)
     ax.set_title(axis_title)
     if title is not None:
@@ -1421,12 +1461,16 @@ def diffplot_mus(labels, mus, pis, matches, files, out_file,
     ax.set_aspect(aspect)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
+
+    if annot != (0,0):
+        plt.axhline(y = 0, xmin = (annot[0]-min(list(mu1.index)))/(max(list(mu1.index))-min(list(mu1.index))), xmax = (annot[1]-min(list(mu1.index)))/(max(list(mu1.index))-min(list(mu1.index))), color = 'r')
+
     plt.tight_layout()
     plt.savefig(out_file)
     plt.close()
 
 
-def scatterplot_mus(labels, mus, pis, matches, files, out_file,
+def scatterplot_mus(file_labels, group_labels, mus, merged, pis, matches, files, out_file, annot,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -1441,18 +1485,19 @@ def scatterplot_mus(labels, mus, pis, matches, files, out_file,
       indexes must have the same length in order to know which points from mu1
       and mu2 correspond to each other.
     """
-    if len(labels) != 2:
+    if len(group_labels) != 2:
         raise ValueError("scatterplot_mus requires exactly two labels")
-    l1, l2 = labels
-    seq_file_1 = os.path.join(files.loc[l1, "Projects"],
-            files.loc[l1, "Project"], "Ref_Genome",
-            f"{matches[l1]['ref']}.fasta")
-    seq_file_2 = os.path.join(files.loc[l2, "Projects"],
-            files.loc[l2, "Project"], "Ref_Genome",
-            f"{matches[l2]['ref']}.fasta")
+    fl1, fl2 = file_labels
+    l1, l2 = group_labels
+    seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
+            files.loc[fl1, "Project"], "Ref_Genome",
+            f"{matches[fl1]['ref']}.fasta")
+    seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
+            files.loc[fl2, "Project"], "Ref_Genome",
+            f"{matches[fl2]['ref']}.fasta")
     name_1, seq_1 = read_fasta(seq_file_1)
     name_2, seq_2 = read_fasta(seq_file_2)
-    seqs = {l1: seq_1, l2: seq_2}
+    seqs = {fl1: seq_1, fl2: seq_2}
     mus = align_mus(mus, matched_indexes=matched_indexes, seqs=seqs)
     mu1, mu2 = mus[l1], mus[l2]
     mu1 = mu1 / mu1.max()
@@ -1516,26 +1561,42 @@ def scatterplot_mus(labels, mus, pis, matches, files, out_file,
         if label_titles:
             xlabel = l1
         else:
-            xlabel = (f"{matches[l1]['sample']}: K {files.loc[l1, 'K']},"
-                    f" cluster {files.loc[l1, 'Cluster']} (p={pis[l1]}),"
-                    f" run {files.loc[l1, 'Run']}")
+            if not matches[fl1]["Pop_Avg"]:
+                if not merged:
+                    xlabel = (f"{matches[fl1]['sample']}: K {files.loc[fl1, 'K']},"
+                            f" cluster {files.loc[fl1, 'Cluster']} (p={pis[fl1]}),"
+                            f" run {files.loc[fl1, 'Run']}")
+                else:
+                    xlabel = (f"{matches[fl1]['sample']}: Merged")
+            else:
+                xlabel = (matches[fl1]['sample'])
     ax.set_xlabel(xlabel)
     if ylabel is None:
         if label_titles:
             ylabel = l2
         else:
-            ylabel = (f"{matches[l2]['sample']}: K {files.loc[l2, 'K']},"
-                    f"cluster {files.loc[l2, 'Cluster']} (p={pis[l2]}),"
-                    f"run {files.loc[l2, 'Run']}")
+            if not matches[fl2]["Pop_Avg"]:
+                if not merged:
+                    ylabel = (f"{matches[fl2]['sample']}: K {files.loc[fl2, 'K']},"
+                            f"cluster {files.loc[fl2, 'Cluster']} (p={pis[fl2]}),"
+                            f"run {files.loc[fl2, 'Run']}")
+                else:
+                    ylabel = (f"{matches[fl2]['sample']}: Merged")
+            else:
+                ylabel = (matches[fl2]['sample'])
     ax.set_ylabel(ylabel)
     if title is not None:
         ax.set_title(title)
+
+    if annot != (0,0):
+        plt.axhline(y = 0, xmin = (annot[0]-min(list(mu1.index)))/(max(list(mu1.index))-min(list(mu1.index))), xmax = (annot[1]-min(list(mu1.index)))/(max(list(mu1.index))-min(list(mu1.index))), color = 'r')
+
     fig.tight_layout()
     plt.savefig(out_file)
     plt.close()
 
 
-def scatterplot_matrix_mus(labels, mus, pis, matches, files, out_file,
+def scatterplot_matrix_mus(file_labels, group_labels, mus, pis, matches, files, out_file,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, mu_max_cutoff=0.5,
@@ -1544,18 +1605,19 @@ def scatterplot_matrix_mus(labels, mus, pis, matches, files, out_file,
     """
     Draw a scatterplot matrix.
     """
-    if len(labels) != 2:
+    if len(group_labels) != 2:
         raise ValueError("scatterplot_matrix_mus requires exactly two labels")
-    l1, l2 = labels
+    fl1, fl2 = file_labels
+    l1, l2 = group_labels
     mus = align_mus(mus, matched_indexes=matched_indexes)
     mus1, mus2 = mus[l1], mus[l2]
     if base_color:
-        seq_file_1 = os.path.join(files.loc[l1, "Projects"],
-                files.loc[l1, "Project"], "Ref_Genome",
-                f"{matches[l1]['ref']}.fasta")
-        seq_file_2 = os.path.join(files.loc[l2, "Projects"],
-                files.loc[l2, "Project"], "Ref_Genome",
-                f"{matches[l2]['ref']}.fasta")
+        seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
+                files.loc[fl1, "Project"], "Ref_Genome",
+                f"{matches[fl1]['ref']}.fasta")
+        seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
+                files.loc[fl2, "Project"], "Ref_Genome",
+                f"{matches[fl2]['ref']}.fasta")
         name_1, seq_1 = read_fasta(seq_file_1)
         name_2, seq_2 = read_fasta(seq_file_2)
     else:
@@ -1615,12 +1677,24 @@ def scatterplot_matrix_mus(labels, mus, pis, matches, files, out_file,
         if label_titles:
             xlabel = l1
         else:
-            xlabel = f"{matches[l1]['sample']}: K {files.loc[l1, 'K']}"
+            if not matches[fl1]["Pop_Avg"]:
+                if not merged:
+                    xlabel = f"{matches[fl1]['sample']}: K {files.loc[fl1, 'K']}"
+                else:
+                    xlabel = f"{matches[fl1]['sample']}: Merged"
+            else:
+                xlabel = f"{matches[fl1]['sample']}: Pop_Avg"
     if ylabel is None:
         if label_titles:
             ylabel = l2
         else:
-            ylabel = f"{matches[l2]['sample']}: K {files.loc[l2, 'K']}"
+            if not matches[fl2]["Pop_Avg"]:
+                if not merged:
+                    ylabel = f"{matches[fl2]['sample']}: K {files.loc[fl2, 'K']}"
+                else:
+                    ylabel = f"{matches[fl2]['sample']}: Merged"
+            else:
+                ylabel = f"{matches[fl2]['sample']}: Pop_Avg"
     # add a big axis, hide frame
     fig.add_subplot(111, frameon=False)
     # hide tick and tick label of the big axis
@@ -1639,19 +1713,19 @@ def scatterplot_matrix_mus(labels, mus, pis, matches, files, out_file,
     return pearson_corr, pearson_p, spearman_corr, spearman_p
 
 
-def barplot_mus(labels, mus, pis, matches, files, out_file, sharey=True,
+def barplot_mus(file_labels, group_labels, mus, merged, pis, matches, files, out_file, annot, sharey=True,
         sharex=False, base_color=True, title=None, xlabel="Position",
         ylabel="DMS signal", label_titles=False, **kwargs):
     """
     Generate a barplot
     """
-    n_plots = len(labels)
+    n_plots = len(group_labels)
     fig, axs = plt.subplots(n_plots, 1, squeeze=False, sharey=sharey,
             sharex=sharex)
-    for i_plot, label in enumerate(labels):
+    for i_plot, label in enumerate(file_labels):
         ax = axs[i_plot, 0]
         row = files.loc[label, :]
-        mu = mus[label]
+        mu = mus[group_labels[i_plot]]
         match = matches[label]
         if base_color:
             seq_file = os.path.join(row["Projects"], row["Project"],
@@ -1661,11 +1735,21 @@ def barplot_mus(labels, mus, pis, matches, files, out_file, sharey=True,
         else:
             colors = None
         ax.bar(mu.index, mu, color=colors)
+
+        if annot != (0,0):
+            ax.axhline(y = 0, xmin = (annot[0]-min(list(mu.index)))/(max(list(mu.index))-min(list(mu.index))), xmax = (annot[1]-min(list(mu.index)))/(max(list(mu.index))-min(list(mu.index))), color = 'r')
+        
         if label_titles:
             axis_title = label
         else:
-            axis_title = (f"{match['sample']}: K {row['K']}, cluster"
-                    f" {row['Cluster']} (p={pis[label]}), run {row['Run']}")
+            if not match['Pop_Avg']:
+                if not merged:
+                    axis_title = (f"{match['sample']}: K {row['K']}, cluster"
+                            f" {row['Cluster']} (p={pis[label]}), run {row['Run']}")
+                else:
+                    axis_title = (f"{match['sample']}: Merged")
+            else:
+                axis_title = (f"{match['sample']}: Pop_Avg")
         ax.set_title(axis_title)
     if title is not None:
         fig.suptitle(title)
@@ -1684,7 +1768,7 @@ def barplot_mus(labels, mus, pis, matches, files, out_file, sharey=True,
     plt.close()
 
 
-def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
+def corrbar_mus(correlation, sample, file_labels, labels, groups, mus, matched_replicates, pis, matches, files, out_file,
         title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05, coeff_det=True, pearson=True, spearman=True, **kwargs):
     """
@@ -1703,13 +1787,20 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     if len(labels) != 4:
         raise ValueError("corrbar_mus requires exactly four labels.")
 
-    l1, l2, l3, l4 = labels
+    fl1, fl3, fl2, fl4 = file_labels
+    l1, l3, l2, l4 = labels
     
     if groups is None:
-        groups = [f"{l1}_vs_{l3}", f"{l2}_vs_{l4}", f"{l1}_vs_{l2}", f"{l3}_vs_{l4}"]
+        if matched_replicates:
+            groups = [f"{l1}_vs_{l3}", f"{l2}_vs_{l4}", f"{l1}_vs_{l2}", f"{l3}_vs_{l4}"]
+        else:
+            groups = [f"{l1}_vs_{l3}", f"{l2}_vs_{l4}", f"{l1}_vs_{l2}", f"{l3}_vs_{l4}", f"{l1}_vs_{l4}", f"{l2}_vs_{l3}"]
     else:
         group1, group2 = groups
-        groups = [f"{group1}1_vs_{group1}2", f"{group2}1_vs_{group2}2", f"{group1}1_vs_{group2}1", f"{group1}2_vs_{group2}2"]
+        if matched_replicates:
+            groups = [f"{group1}1_vs_{group1}2", f"{group2}1_vs_{group2}2", f"{group1}1_vs_{group2}1", f"{group1}2_vs_{group2}2"]
+        else:
+            groups = [f"{group1}1_vs_{group1}2", f"{group2}1_vs_{group2}2", f"{group1}1_vs_{group2}1", f"{group1}2_vs_{group2}2", f"{group1}1_vs_{group2}2", f"{group1}2_vs_{group2}1"]
     
     print(f"Using groups: {', '.join(groups)}")
 
@@ -1717,23 +1808,27 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     for group in groups:
         grouped_data[group] = {"corrs":dict()}
     
-    grouped_data[groups[0]]["labels"] = (l1, l2)
-    grouped_data[groups[1]]["labels"] = (l3, l4)
-    grouped_data[groups[2]]["labels"] = (l1, l3)
-    grouped_data[groups[3]]["labels"] = (l2, l4)
+    if matched_replicates:
+        grouped_data[groups[0]]["labels"] = (l1, l2)
+        grouped_data[groups[1]]["labels"] = (l3, l4)
+        grouped_data[groups[2]]["labels"] = (l1, l3)
+        grouped_data[groups[3]]["labels"] = (l2, l4)
+    else:
+        grouped_data[groups[4]]["labels"] = (l1, l4)
+        grouped_data[groups[5]]["labels"] = (l2, l3)
 
-    seq_file_1 = os.path.join(files.loc[l1, "Projects"],
-            files.loc[l1, "Project"], "Ref_Genome",
-            f"{matches[l1]['ref']}.fasta")
-    seq_file_2 = os.path.join(files.loc[l2, "Projects"],
-            files.loc[l2, "Project"], "Ref_Genome",
-            f"{matches[l2]['ref']}.fasta")
-    seq_file_3 = os.path.join(files.loc[l3, "Projects"],
-            files.loc[l3, "Project"], "Ref_Genome",
-            f"{matches[l3]['ref']}.fasta")
-    seq_file_4 = os.path.join(files.loc[l4, "Projects"],
-            files.loc[l4, "Project"], "Ref_Genome",
-            f"{matches[l4]['ref']}.fasta")
+    seq_file_1 = os.path.join(files.loc[fl1, "Projects"],
+            files.loc[fl1, "Project"], "Ref_Genome",
+            f"{matches[fl1]['ref']}.fasta")
+    seq_file_2 = os.path.join(files.loc[fl2, "Projects"],
+            files.loc[fl2, "Project"], "Ref_Genome",
+            f"{matches[fl2]['ref']}.fasta")
+    seq_file_3 = os.path.join(files.loc[fl3, "Projects"],
+            files.loc[fl3, "Project"], "Ref_Genome",
+            f"{matches[fl3]['ref']}.fasta")
+    seq_file_4 = os.path.join(files.loc[fl4, "Projects"],
+            files.loc[fl4, "Project"], "Ref_Genome",
+            f"{matches[fl4]['ref']}.fasta")
 
     name_1, seq_1 = read_fasta(seq_file_1)
     name_2, seq_2 = read_fasta(seq_file_2)
@@ -1747,42 +1842,43 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     fig, ax = plt.subplots()
 
     if coeff_det:
-        pearson_corr_set1, pearson_pval_set1 = pearsonr(mu1, mu2)
-        pearson_corr_set2, pearson_pval_set2 = pearsonr(mu3, mu4)
-        pearson_corr_set3, pearson_pval_set3 = pearsonr(mu1, mu3)
-        pearson_corr_set4, pearson_pval_set4 = pearsonr(mu2, mu4)
+        if correlation == "spearman":
+            corr_set1, pval_set1 = spearmanr(mu1, mu2)
+            corr_set2, pval_set2 = spearmanr(mu3, mu4)
+            corr_set3, pval_set3 = spearmanr(mu1, mu3)
+            corr_set4, pval_set4 = spearmanr(mu2, mu4)
+            if not matched_replicates:
+                corr_set5, pval_set5 = spearmanr(mu1, mu4)
+                corr_set6, pval_set6 = spearmanr(mu2, mu3)
+        else:
+            corr_set1, pval_set1 = pearsonr(mu1, mu2)
+            corr_set2, pval_set2 = pearsonr(mu3, mu4)
+            corr_set3, pval_set3 = pearsonr(mu1, mu3)
+            corr_set4, pval_set4 = pearsonr(mu2, mu4)
+            if not matched_replicates:
+                corr_set5, pval_set5 = pearsonr(mu1, mu4)
+                corr_set6, pval_set6 = pearsonr(mu2, mu3)
+                if correlation == "":
+                    corr_set5 = corr_set5**2
+                    corr_set6 = corr_set6**2
+            if correlation == "":
+                corr_set1 = corr_set1**2
+                corr_set2 = corr_set2**2
+                corr_set3 = corr_set3**2
+                corr_set4 = corr_set4**2
 
-        grouped_data[groups[0]]["corrs"]["R^2"] = round(pearson_corr_set1**2, 5)
-        grouped_data[groups[1]]["corrs"]["R^2"] = round(pearson_corr_set2**2, 5)
-        grouped_data[groups[2]]["corrs"]["R^2"] = round(pearson_corr_set3**2, 5)
-        grouped_data[groups[3]]["corrs"]["R^2"] = round(pearson_corr_set4**2, 5)
-
-    # if pearson:
-        # pearson_corr_set1, pearson_pval_set1 = pearsonr(mu1, mu2)
-        # pearson_corr_set2, pearson_pval_set2 = pearsonr(mu3, mu4)
-        # pearson_corr_set3, pearson_pval_set3 = pearsonr(mu1, mu3)
-        # pearson_corr_set4, pearson_pval_set4 = pearsonr(mu2, mu4)
-
-        # grouped_data[group[0]]["corrs"]["pearson"] = round(pearson_corr_set1, 5)
-        # grouped_data[group[1]]["corrs"]["pearson"] = round(pearson_corr_set2, 5)
-        # grouped_data[group[2]]["corrs"]["pearson"] = round(pearson_corr_set3, 5)
-        # grouped_data[group[3]]["corrs"]["pearson"] = round(pearson_corr_set4, 5)
-
-    # if spearman:
-    #     spearman_corr_set1, spearman_pval_set1 = spearmanr(mu1, mu2)
-    #     spearman_corr_set2, spearman_pval_set2 = spearmanr(mu3, mu4)
-    #     spearman_corr_set3, spearman_pval_set3 = spearmanr(mu1, mu3)
-    #     spearman_corr_set4, spearman_pval_set4 = spearmanr(mu2, mu4)
-
-        # grouped_data[group[0]]["corrs"]["spearman"] = round(spearman_corr_set1, 5)
-        # grouped_data[group[1]]["corrs"]["spearman"] = round(spearman_corr_set2, 5)
-        # grouped_data[group[2]]["corrs"]["spearman"] = round(spearman_corr_set3, 5)
-        # grouped_data[group[3]]["corrs"]["spearman"] = round(spearman_corr_set4, 5)
+        grouped_data[groups[0]]["corr"] = round(corr_set1, 5)
+        grouped_data[groups[1]]["corr"] = round(corr_set2, 5)
+        grouped_data[groups[2]]["corr"] = round(corr_set3, 5)
+        grouped_data[groups[3]]["corr"] = round(corr_set4, 5)
+        if not matched_replicates:
+            grouped_data[groups[4]]["corr"] = round(corr_set5, 5)
+            grouped_data[groups[5]]["corr"] = round(corr_set6, 5)
 
     correlations = dict()
     for group in grouped_data:
-        correlations[group] = grouped_data[group]["corrs"]["R^2"]
-    
+        correlations[group] = grouped_data[group]["corr"]
+
     def autolabel(rects):
         """Attach a text label above each bar in *rects*, displaying its height."""
         for rect in rects:
@@ -1799,10 +1895,14 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     xy_lim = 1.1 * (1 + margin)
     if xlabel is not None:
         ax.set_xlabel(xlabel)
-    if ylabel is not None:
-        ax.set_ylabel(ylabel)
-    else:
-        ax.set_ylabel("R^2")
+    if ylabel is None:
+        if correlation == "spearman":
+            ylabel = "Correlation (Spearman's rho)"
+        elif correlation == "pearson":
+            ylabel = "Correlation (Pearson's r)"
+        else:
+            ylabel = "Correlation (R^2)"
+    ax.set_ylabel(ylabel)
     ax.set_ylim(0,xy_lim)
     if title is not None:
         ax.set_title(title)
@@ -1813,7 +1913,7 @@ def corrbar_mus(sample, labels, groups, mus, pis, matches, files, out_file,
     plt.close()
 
 
-def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file,
+def contcorr_mus(correlation, sample, labels, mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, annot,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -1848,14 +1948,24 @@ def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, single
         start = 0
         for modified_base_num, position in enumerate(mu1):
             end = start+window
-            pearson_corr, pearson_pval = pearsonr(mu1[start:end], mu2[start:end])
+            if correlation == "spearman":
+                corr, pval = spearmanr(mu1[start:end], mu2[start:end])
+            else:
+                corr, pval = pearsonr(mu1[start:end], mu2[start:end])
+                if correlation != "pearson":
+                    corr = corr**2
+         #   pearson_corr, pearson_pval = spearmanr(mu1[start:end], mu2[start:end])
             if end >= len(indices):
                 end = len(indices)-1
                 middle = (indices[end]-indices[start])/2+indices[start]
-                data_dict[middle] = pearson_corr**2
+                data_dict[middle] = corr
                 break
             middle = (indices[end]-indices[start])/2+indices[start]
-            data_dict[middle] = pearson_corr**2
+            # if round(middle) == 250:
+            #     print(group)
+            #     print(mu1[start:end])
+            #     print(mu2[start:end])
+            data_dict[middle] = corr
             start += 1
         ax.plot(data_dict.keys(), data_dict.values(), label=group)
         # if equal_axes:
@@ -1911,12 +2021,21 @@ def contcorr_mus(sample, labels, mus, replicate_data, matched_replicates, single
         xlabel = "Position (bp)"
     ax.set_xlabel(xlabel)
     if ylabel is None:
-        ylabel = "Correlation (R^2)"
+        if correlation == "spearman":
+            ylabel = "Correlation (Spearman's rho)"
+        elif correlation == "pearson":
+            ylabel = "Correlation (Pearson's r)"
+        else:
+            ylabel = "Correlation (R^2)"
     ax.set_ylabel(ylabel)
     if title is not None:
         ax.set_title(title)
     else:
         ax.set_title(f"{sample} DMS Reactivity Correlation")
+
+    if annot != (0,0):
+        plt.axhline(y = 0, xmin = (annot[0]-min(list(processed_mus[labels[0]].index)))/(max(list(processed_mus[labels[0]].index))-min(list(processed_mus[labels[0]].index))), xmax = (annot[1]-min(list(processed_mus[labels[0]].index)))/(max(list(processed_mus[labels[0]].index))-min(list(processed_mus[labels[0]].index))), color = 'r')
+
     fig.tight_layout()
     plt.savefig(out_file)
     plt.close()
