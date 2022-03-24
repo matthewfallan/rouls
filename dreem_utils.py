@@ -2106,8 +2106,8 @@ def filter_coverage(label, threshold, files):
     Given a BitVector_Files directory, return the positions covered by at least {threshold} bit vectors.
     params:
     - bitvector_files_dir (str): directory in which to search for samples
-    - sample ... end (str): values of sample, reference genome, start position,
-      end position
+    - threshold (int): number of bit vectors a position must have or exceed to pass filtering
+    - files (pd.Dataframe): files sheet of the plot_mus.py excel loaded as a pandas dataframe
     returns:
     - passed (list[int]): positions overlapped by >= threshold informative bit vectors
     """
