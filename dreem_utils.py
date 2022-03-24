@@ -29,6 +29,8 @@ from sklearn.metrics import roc_curve, roc_auc_score
 sys.path = [os.path.dirname(__file__)] + sys.path
 from seqs import get_ac_positions, read_fasta 
 
+from struct_utils import read_ct_file_single
+from struct_utils import plot_arc
 
 POP_AVG_MM = "Mismatches"
 POP_AVG_MMDEL = "Mismatches + Deletions"
@@ -1149,7 +1151,7 @@ def plot_mus(plots_file, label_delim=", "):
     plots_dtypes = {"Type": str, "Labels": str, "File": str,
             "Options": str, "Sample": str, "Length": str,
             "Groups": str, "Window": int, "Threshold": int,
-            "Matched_Replicates": bool, "Annotate": str}
+            "Matched_Replicates": bool, "Annotate": str, "Arc": bool, "Ct": str, "Structure": int}
     files = pd.read_excel(plots_file, sheet_name="Files",
             dtype=files_dtypes, index_col="Label", na_filter=False)
     plots = pd.read_excel(plots_file, sheet_name="Plots",
@@ -1158,6 +1160,7 @@ def plot_mus(plots_file, label_delim=", "):
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
     for row in tqdm(plots.itertuples()):
+        labels_value = row.Labels
         if hasattr(row, "Matched_Replicates"):
             matched_replicates = row.Matched_Replicates
         else:
@@ -1255,7 +1258,19 @@ def plot_mus(plots_file, label_delim=", "):
                 window = int(row.Window)
             except AttributeError:
                 raise AttributeError("Contcorr plots require the 'Window' column is populated.")
-            contcorr_mus(correlation, sample, labels, sub_mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, annot, **options)
+            if hasattr(row, "Arc"):
+                arc = row.Arc
+                if hasattr(row, "Structure"):
+                    structure_number = row.Structure
+                else:
+                    structure_number = 1
+                try:
+                    ct_file = row.Ct
+                except AttributeError:
+                    raise AttributeError("Contcorr plots require a .ct file is specified in the 'Ct' column is populated if requesting an arc plot overlay.")
+            else:
+                arc = False
+            contcorr_mus(correlation, sample, labels, sub_mus, replicate_data, matched_replicates, single_replicate, window, arc, ct_file, structure_number, pis, matches, file_labels, files, out_file, annot, **options)
         else:
             raise ValueError(f"Unrecognized type of plot: '{row.Type}'")
 
@@ -1913,7 +1928,7 @@ def corrbar_mus(correlation, sample, file_labels, labels, groups, mus, matched_r
     plt.close()
 
 
-def contcorr_mus(correlation, sample, labels, mus, replicate_data, matched_replicates, single_replicate, window, pis, matches, file_labels, files, out_file, annot,
+def contcorr_mus(correlation, sample, labels, mus, replicate_data, matched_replicates, single_replicate, window, arc, ct_file, structure_number, pis, matches, file_labels, files, out_file, annot,
         base_color=True, title=None, xlabel=None, ylabel=None,
         label_titles=False, matched_indexes=True, margin=0.05,
         xy_line=True, coeff_det=True, pearson=True, spearman=True,
@@ -2014,7 +2029,12 @@ def contcorr_mus(correlation, sample, labels, mus, replicate_data, matched_repli
                 plot(f"{labels[2]}_vs_{labels[1]}", [processed_mus[labels[2]], processed_mus[labels[1]]])
     else:
         plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
-        
+
+    if arc:
+        name, pairs, paired, seq = read_ct_file_single(ct_file, multiple=structure_number)
+        ax = plot_arc("", seq, pairs, contcorr=True, contcorr_ax=ax)
+    else:
+        name = None
     plt.legend()
     ax.set_ylim(0, 1.1)
     if xlabel is None:
