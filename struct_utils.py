@@ -17,9 +17,75 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 
+from matplotlib import patches
+from matplotlib import pyplot as plt
+
+
 
 UNPAIRED_CHAR = "."
 NAME_MARK = ">"
+
+def plot_arc(plot_file, seq, pairs, contcorr=False, contcorr_ax=None, start_pos=1, height_ratio=None, height_margin=0.05, title=None, dpi=300):
+    """
+    Plot an arc plot of an RNA structure.
+    Same arguments as write_ct_file.
+    """
+    if height_ratio is None:
+        height_ratio = 2 / (1 + 5**0.5)  # reciprocal of golden ratio
+    n = len(seq)
+    offset = start_pos - 1
+    if contcorr:
+        ax = contcorr_ax
+        patch_dict = dict()
+    else:
+        fig, ax = plt.subplots()
+    # Then plot an arc for each base pair.
+    max_height = 0.0
+    for base5, base3 in pairs:
+        if contcorr:
+            patch_dict[(base5, base3)] = dict()
+        if not 0 < base5 < base3 <= n:
+            raise ValueError("invalid base numbers")
+        x5 = base5 + offset
+        x3 = base3 + offset
+        xy = ((x5 + x3) / 2, 0)
+        width = x3 - x5
+        height = height_ratio * width
+        max_height = max(height / 2, max_height)
+        theta1 = 0.0  # degrees
+        theta2 = 180.0  # degrees
+        if contcorr:
+            arc_dict = patch_dict[(base5, base3)]
+            arc_dict["xy"] = xy
+            arc_dict["width"] = width
+            arc_dict["height"] = height
+            arc_dict["angle"] = 0.0
+            arc_dict["theta1"] = theta1
+            arc_dict["theta2"] = theta2
+            arc_dict["linewidth"] = 0.25
+        else:
+            ax.add_patch(patches.Arc(xy, width, height, angle=0.0,
+                    theta1=theta1, theta2=theta2, linewidth=0.25))
+    if contcorr:
+        max_height = max([patch["height"] for patch in list(patch_dict.values())])
+        for pair in patch_dict:
+            ax.add_patch(patches.Arc(patch_dict[pair]["xy"], patch_dict[pair]["width"], 0.8*(patch_dict[pair]["height"]/max_height), angle=patch_dict[pair]["angle"],
+                    theta1=patch_dict[pair]["theta1"], theta2=patch_dict[pair]["theta2"], linewidth=patch_dict[pair]["linewidth"]))
+        return ax
+    ax.set_ylim((0.0, max_height * (height_margin + 1.0)))
+    ax.set_yticks([])
+    ax.set_xlim((start_pos, offset + n))
+    ax.set_xlabel("Position")
+    for spine in ["left", "top", "right"]:
+        ax.spines[spine].set_visible(False)
+    ax.set_aspect(1.0)
+    if title is not None:
+        ax.set_title(str(title))
+    if plot_file.endswith(".png"):
+        plt.savefig(plot_file, dpi=dpi)
+    else:
+        plt.savefig(plot_file)
+    plt.close()
 
 
 def read_dot_file(dot_file, start_pos=1, title_mode="keep"):
@@ -60,6 +126,7 @@ def read_dot_file(dot_file, start_pos=1, title_mode="keep"):
     paired = pd.DataFrame.from_dict(paired, orient="columns").reindex(
             columns=headers)
     return paired, seq
+
 
 
 def read_ct_file(ct_file, start_pos=1, title_mode="keep"):
@@ -237,7 +304,7 @@ def read_ct_file_single(ct_file, start_pos=1, title_mode="keep",
             name = names[0]
     elif isinstance(multiple, int):
         try:
-            name = names[multiple]
+            name = names[multiple-1]
         except IndexError:
             raise ValueError(f"{ct_file} has {len(names)} structures"
                     f" but requested structure {multiple}")
@@ -258,7 +325,7 @@ def read_dot_file_single(dot_file, start_pos=1, title_mode="keep",
             name = names[0]
     elif isinstance(multiple, int):
         try:
-            name = names[multiple]
+            name = names[multiple-1]
         except IndexError:
             raise ValueError(f"{dot_file} has {len(names)} structures"
                     f" but requested structure {multiple}")
