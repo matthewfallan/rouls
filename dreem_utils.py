@@ -1160,7 +1160,6 @@ def plot_mus(plots_file, label_delim=", "):
     # Create a plot for each row in the "Plots" sheet.
     print("Creating Plots ...")
     for row in tqdm(plots.itertuples()):
-        ct_file = ""
         labels_value = row.Labels
         if hasattr(row, "Matched_Replicates"):
             matched_replicates = row.Matched_Replicates
@@ -2032,9 +2031,8 @@ def contcorr_mus(correlation, sample, labels, mus, replicate_data, matched_repli
         plot(f"{labels[0]}_vs_{labels[1]}", [processed_mus[labels[0]], processed_mus[labels[1]]])
 
     if arc:
-        if ct_file != "":
-            name, pairs, paired, seq = read_ct_file_single(ct_file, multiple=structure_number)
-            ax = plot_arc("", seq, pairs, contcorr=True, contcorr_ax=ax)
+        name, pairs, paired, seq = read_ct_file_single(ct_file, multiple=structure_number)
+        ax = plot_arc("", seq, pairs, contcorr=True, contcorr_ax=ax)
     else:
         name = None
     plt.legend()
